@@ -149,9 +149,14 @@ def test_scrape_templates_lists_municipalities(client):
     res = client.get("/api/v1/scrape/templates")
     assert res.status_code == 200
     data = res.get_json()
-    slugs = {item["slug"] for item in data["municipalities"]}
+    municipalities = {item["slug"]: item for item in data["municipalities"]}
+    slugs = set(municipalities)
     assert "kitchener" in slugs
     assert "waterloo" in slugs
+    assert municipalities["waterloo"]["defaultGeojsonUrl"] == (
+        "https://gis.waterloo.ca/maps/rest/services/Public/Public_Operations/"
+        "MapServer/48/query?where=1%3D1&outFields=*&f=geojson&outSR=4326"
+    )
 
 
 def test_scrape_geojson_normalized(client, monkeypatch):
@@ -206,10 +211,49 @@ def test_scrape_geojson_normalized(client, monkeypatch):
     assert data["records"][0]["zoneCode"] == "RES-2"
 
 
-def test_scrape_geojson_normalized_requires_geojson_when_template_has_none(client):
+def test_scrape_geojson_normalized_uses_default_waterloo_geojson_url(client, monkeypatch):
+    def fake_scrape_geojson(
+        *,
+        source_url,
+        geojson_url,
+        allowed_domains,
+        paginate,
+        page_size,
+        max_pages,
+    ):
+        assert "gis.waterloo.ca" in allowed_domains
+        assert geojson_url == (
+            "https://gis.waterloo.ca/maps/rest/services/Public/Public_Operations/"
+            "MapServer/48/query?where=1%3D1&outFields=*&f=geojson&outSR=4326"
+        )
+        return GeoJSONResult(
+            source_url=source_url,
+            geojson_url=geojson_url,
+            feature_collection={
+                "type": "FeatureCollection",
+                "features": [
+                    {
+                        "type": "Feature",
+                        "properties": {
+                            "OBJECTID": 1,
+                            "ZONE_CODE": "MR-25",
+                            "ZONE_TYPE": "Mixed Residential",
+                            "ZONE_LABEL": "Medium Density",
+                        },
+                        "geometry": {"type": "Polygon", "coordinates": []},
+                    }
+                ],
+            },
+        )
+
+    monkeypatch.setattr("app.api.scrape.scrape_geojson_data", fake_scrape_geojson)
+
     res = client.post(
         "/api/v1/scrape/geojson/normalized",
         json={"municipality": "waterloo"},
     )
-    assert res.status_code == 400
-    assert "default GeoJSON URL" in res.get_json()["error"]
+    assert res.status_code == 200
+    data = res.get_json()
+    assert data["municipality"] == "waterloo"
+    assert data["normalizedCount"] == 1
+    assert data["records"][0]["zoneCode"] == "MR-25"

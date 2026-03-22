@@ -46,15 +46,22 @@ _TEMPLATES: dict[str, MunicipalityTemplate] = {
     "waterloo": MunicipalityTemplate(
         slug="waterloo",
         display_name="City of Waterloo",
-        source_url="https://www.waterloo.ca/council-and-city-administration/open-data-and-maps/",
+        source_url=(
+            "https://gis.waterloo.ca/maps/rest/services/Public/"
+            "Public_Operations/MapServer?f=json"
+        ),
         allowed_domains=("gis.waterloo.ca", "maps.waterloo.ca", "waterloo.ca"),
+        default_geojson_url=(
+            "https://gis.waterloo.ca/maps/rest/services/Public/Public_Operations/"
+            "MapServer/48/query?where=1%3D1&outFields=*&f=geojson&outSR=4326"
+        ),
         zone_code_fields=("ZONE", "ZONE_CODE", "ZONE_CLASS"),
         zone_type_fields=("ZONE_TYPE",),
-        zone_name_fields=("ZONE_NAME", "LABEL"),
+        zone_name_fields=("ZONE_LABEL", "ZONE_NAME", "LABEL"),
         status_fields=("STATUS",),
         bylaw_number_fields=("BYLAW_NO", "BYLAW"),
         effective_date_fields=("EFFECTIVE_DATE",),
-        source_id_fields=("OBJECTID", "id"),
+        source_id_fields=("ZONING_ID", "OBJECTID", "id"),
     ),
 }
 
