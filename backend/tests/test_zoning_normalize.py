@@ -94,7 +94,7 @@ def test_normalize_waterloo_feature_collection_uses_layer_48_fields():
     assert record["zoneCode"] == "MR-25"
     assert record["zoneName"] == "Medium Density Residential"
     assert record["status"] == "In Force"
-    assert record["zoneType"] is None
+    assert record["zoneType"] == "Mixed Residential"
 
 
 def test_waterloo_template_points_to_arcgis_source_and_default_geojson():
@@ -155,3 +155,31 @@ def test_normalize_waterloo_skips_non_polygon_and_missing_source_id():
     assert result.skipped_count == 2
     assert result.records[0]["sourceObjectId"] == "3"
     assert result.records[0]["zoneCode"] == "R3"
+    assert result.records[0]["zoneType"] == "Residential"
+
+
+def test_normalize_waterloo_prefers_explicit_zone_type_when_present():
+    template = get_municipality_template("waterloo")
+    result = normalize_zoning_feature_collection(
+        municipality=template,
+        source_url=template.source_url,
+        geojson_url=template.default_geojson_url or "https://example.org/geojson",
+        feature_collection={
+            "type": "FeatureCollection",
+            "features": [
+                {
+                    "type": "Feature",
+                    "properties": {
+                        "ZONING_ID": 42,
+                        "ZONE_CODE": "R8",
+                        "ZONE_TYPE": "Custom Residential Bucket",
+                        "ZONE_LABEL": "High Rise Residential",
+                    },
+                    "geometry": {"type": "Polygon", "coordinates": []},
+                }
+            ],
+        },
+    )
+
+    assert result.normalized_count == 1
+    assert result.records[0]["zoneType"] == "Custom Residential Bucket"

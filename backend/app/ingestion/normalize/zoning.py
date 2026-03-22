@@ -57,6 +57,11 @@ def normalize_zoning_feature_collection(
             continue
 
         zone_type = _pick_first_non_empty(properties, municipality.zone_type_fields)
+        if zone_type is None:
+            zone_type = _derive_zone_type_from_code(
+                municipality_slug=municipality.slug,
+                zone_code=zone_code,
+            )
         zone_name = _pick_first_non_empty(properties, municipality.zone_name_fields)
         status = _pick_first_non_empty(properties, municipality.status_fields)
         bylaw_number = _pick_first_non_empty(
@@ -159,3 +164,34 @@ def _is_allowed_geometry_type(
     if not isinstance(geometry_type, str):
         return False
     return geometry_type in allowed_geometry_types
+
+
+def _derive_zone_type_from_code(*, municipality_slug: str, zone_code: str) -> str | None:
+    if municipality_slug != "waterloo":
+        return None
+
+    code = zone_code.strip().upper()
+    if not code:
+        return None
+
+    prefix_chars: list[str] = []
+    for char in code:
+        if char.isalpha():
+            prefix_chars.append(char)
+            continue
+        break
+    prefix = "".join(prefix_chars)
+    if not prefix:
+        return None
+
+    type_by_prefix = {
+        "A": "Agricultural",
+        "C": "Commercial",
+        "ER": "Environmental",
+        "I": "Industrial",
+        "INST": "Institutional",
+        "MR": "Mixed Residential",
+        "OS": "Open Space",
+        "R": "Residential",
+    }
+    return type_by_prefix.get(prefix)
