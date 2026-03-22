@@ -238,11 +238,14 @@ def ingest_zone_documents(zone_id: int):
 
 
 DEFAULT_ZONE_ANALYZE_QUERY = (
-    "For this zoning district, summarize in clear language: "
-    "(1) What housing or building uses appear permitted, prohibited, or conditional based on the bylaws? "
-    "(2) What do the excerpts say about height, density, setbacks, lot size, or parking if anything? "
-    "(3) What should a builder, planner, or advocate verify next (approvals, maps, other bylaw sections)? "
-    "Use ONLY the retrieved context. If it is insufficient, say so and do not invent numbers or rules."
+    "Answer ONLY for the zoning polygon described in the zone context (official open data).\n"
+    "Using ONLY the bylaw excerpts, explain what may realistically be built or operated on this polygon:\n"
+    "(1) Uses or building types that appear PERMITTED, PROHIBITED, or CONDITIONAL — cite passages; "
+    "do not guess uses that are not stated.\n"
+    "(2) Physical limits in the excerpts: height, storeys, setbacks, density, lot coverage, "
+    "parking, lot size, or façades.\n"
+    "(3) Gaps: schedules, maps, amendments, or other bylaw parts a builder or planner must still verify.\n"
+    "If permitted uses or other topics are not in the excerpts, say clearly NOT IN THE PROVIDED TEXT."
 )
 
 
@@ -253,6 +256,7 @@ def zone_analyze(zone_id: int):
     Returns structured record + ingest results + RAG payload (or RAG error if Groq is not configured).
     """
     from app.services.rag import run_rag
+    from app.services.zone_context import format_zone_context_for_rag
 
     body = request.get_json(silent=True) or {}
     raw_q = body.get("q")
@@ -272,6 +276,7 @@ def zone_analyze(zone_id: int):
         return jsonify({"error": "ingest_failed", "message": str(exc)}), 502
 
     record_detail = _serialize_zone_detail(r)
+    zone_context_text = format_zone_context_for_rag(record_detail)
     rag_out: dict[str, object] = {
         "query": question,
         "answer": None,
@@ -292,10 +297,13 @@ def zone_analyze(zone_id: int):
             result = run_rag(
                 app,
                 question,
-                limit=10,
+                limit=12,
                 municipality=r.municipality,
                 zone_code=r.zone_code,
                 source_object_id=r.source_object_id,
+                zone_type=r.zone_type,
+                zone_name=r.zone_name,
+                zone_context=zone_context_text,
             )
             rag_out["answer"] = result.get("answer")
             rag_out["sources"] = result.get("sources") or []

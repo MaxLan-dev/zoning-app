@@ -33,6 +33,23 @@ def rag():
             return jsonify({"error": "invalid_document_id"}), 400
         document_id = document_id.strip() or None
 
+    document_ids: list[str] | None = None
+    raw_ids = body.get("document_ids")
+    if raw_ids is not None:
+        if not isinstance(raw_ids, list):
+            return jsonify({"error": "invalid_document_ids", "message": "document_ids must be a JSON array."}), 400
+        parsed: list[str] = []
+        for item in raw_ids:
+            if not isinstance(item, str):
+                return jsonify({"error": "invalid_document_ids", "message": "Each document_ids entry must be a string."}), 400
+            s = item.strip()
+            if s:
+                parsed.append(s)
+        document_ids = parsed or None
+
+    if document_ids:
+        document_id = None
+
     municipality = body.get("municipality")
     if municipality is not None:
         if not isinstance(municipality, str):
@@ -51,6 +68,18 @@ def rag():
             return jsonify({"error": "invalid_source_object_id"}), 400
         source_object_id = source_object_id.strip() or None
 
+    zone_type = body.get("zone_type")
+    if zone_type is not None:
+        if not isinstance(zone_type, str):
+            return jsonify({"error": "invalid_zone_type"}), 400
+        zone_type = zone_type.strip() or None
+
+    zone_name = body.get("zone_name")
+    if zone_name is not None:
+        if not isinstance(zone_name, str):
+            return jsonify({"error": "invalid_zone_name"}), 400
+        zone_name = zone_name.strip() or None
+
     try:
         app = current_app._get_current_object()
         result = run_rag(
@@ -58,9 +87,12 @@ def rag():
             q.strip(),
             limit=limit,
             document_id=document_id,
+            document_ids=document_ids,
             municipality=municipality,
             zone_code=zone_code,
             source_object_id=source_object_id,
+            zone_type=zone_type,
+            zone_name=zone_name,
         )
     except ValueError as exc:
         return jsonify({"error": "configuration_error", "message": str(exc)}), 503

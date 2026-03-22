@@ -19,7 +19,7 @@ class BaseConfig:
     EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "all-MiniLM-L6-v2")
 
     GROQ_API_KEY = os.environ.get("GROQ_API_KEY") or None
-    GROQ_MODEL = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
+    GROQ_MODEL = os.environ.get("GROQ_MODEL", "llama-3.1-8b-instant")
 
 
 class DevelopmentConfig(BaseConfig):

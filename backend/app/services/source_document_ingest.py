@@ -4,9 +4,10 @@ import hashlib
 import json
 from datetime import datetime, timezone
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import quote, unquote, urlparse, urlunparse
 
 from flask import Flask
+from sqlalchemy.exc import IntegrityError
 
 from app.extensions import db
 from app.ingestion.scrapers.fetch import fetch_url, _is_probably_pdf
@@ -32,6 +33,35 @@ def looks_like_pdf_url(url: str) -> bool:
     return False
 
 
+def canonical_source_url(url: str) -> str:
+    """
+    Stable form for DB unique key: lower scheme/host, path normalized
+    (e.g. literal spaces vs %20) so the same PDF URL is not inserted twice.
+    """
+    s = (url or "").strip()
+    if not s:
+        return s
+    p = urlparse(s)
+    scheme = (p.scheme or "https").lower()
+    netloc = p.netloc.lower()
+    path = quote(unquote(p.path), safe="/:@%._-+!$&'()*+,;=[]~")
+    return urlunparse((scheme, netloc, path, "", p.query, p.fragment))
+
+
+def _find_source_document_row(url: str, *, content_hash: str | None = None) -> SourceDocument | None:
+    url_fetch = url.strip()
+    url_key = canonical_source_url(url_fetch)
+    for candidate in (url_key, url_fetch):
+        if not candidate:
+            continue
+        row = SourceDocument.query.filter_by(source_url=candidate).one_or_none()
+        if row is not None:
+            return row
+    if content_hash:
+        return SourceDocument.query.filter_by(content_hash=content_hash).one_or_none()
+    return None
+
+
 def ingest_pdf_url_to_qdrant(
     app: Flask,
     url: str,
@@ -43,32 +73,34 @@ def ingest_pdf_url_to_qdrant(
 ) -> dict[str, Any]:
     """
     Download a PDF from ``url``, dedupe by SHA-256 of bytes, upsert into Qdrant.
-    Persists :class:`SourceDocument` for idempotent re-runs.
+    Persists :class:`SourceDocument` for idempotent by URL (canonical) + content hash.
     """
-    url = url.strip()
-    if not url:
+    url_fetch = url.strip()
+    if not url_fetch:
         return {"error": "invalid_url", "message": "URL is empty."}
 
-    fetched = fetch_url(url)
+    fetched = fetch_url(url_fetch)
     body = fetched.content
     if not body:
-        return {"error": "empty_body", "message": "Downloaded empty response.", "source_url": url}
+        return {"error": "empty_body", "message": "Downloaded empty response.", "source_url": url_fetch}
 
-    if not _is_probably_pdf(fetched.content_type, fetched.url) and not looks_like_pdf_url(url):
+    if not _is_probably_pdf(fetched.content_type, fetched.url) and not looks_like_pdf_url(url_fetch):
         return {
             "error": "not_pdf",
             "message": "URL does not look like a PDF (check content-type or path).",
             "content_type": fetched.content_type,
-            "source_url": url,
+            "source_url": url_fetch,
         }
 
     h = hashlib.sha256(body).hexdigest()
-    row = SourceDocument.query.filter_by(source_url=url).one_or_none()
+    row = _find_source_document_row(url_fetch)
+    if row is None:
+        row = _find_source_document_row(url_fetch, content_hash=h)
 
     if row and row.content_hash == h and row.status == "completed" and not force:
         return {
             "status": "unchanged",
-            "source_url": url,
+            "source_url": url_fetch,
             "content_hash": h,
             "document_id": row.qdrant_document_id,
             "message": "Same content hash as last ingest; skipped.",
@@ -79,7 +111,8 @@ def ingest_pdf_url_to_qdrant(
 
     uploaded_at = datetime.now(timezone.utc)
     filename = _filename_from_url(str(fetched.url))
-    extra: dict[str, Any] = {"source_url": url}
+    url_key = canonical_source_url(url_fetch)
+    extra: dict[str, Any] = {"source_url": url_fetch}
     if municipality:
         extra["municipality"] = municipality.strip().lower()
     if zone_code:
@@ -98,29 +131,58 @@ def ingest_pdf_url_to_qdrant(
     )
 
     if result.get("error"):
+        row = row or _find_source_document_row(url_fetch) or _find_source_document_row(
+            url_fetch, content_hash=h
+        )
         if row is None:
-            row = SourceDocument(source_url=url, status="failed")
+            row = SourceDocument(source_url=url_key, status="failed")
             db.session.add(row)
-        row.status = "failed"
+        else:
+            row.status = "failed"
         row.last_error = result.get("message") or result.get("error")
         row.updated_at = datetime.now(timezone.utc)
-        db.session.commit()
-        return {**result, "source_url": url}
+        try:
+            db.session.commit()
+        except IntegrityError:
+            db.session.rollback()
+            row = _find_source_document_row(url_fetch, content_hash=h) or _find_source_document_row(
+                url_fetch
+            )
+            if row is not None:
+                row.status = "failed"
+                row.last_error = result.get("message") or result.get("error")
+                row.updated_at = datetime.now(timezone.utc)
+                db.session.commit()
+        return {**result, "source_url": url_fetch}
 
     new_doc_id = result["document_id"]
     if row is None:
-        row = SourceDocument(source_url=url)
+        row = SourceDocument(source_url=url_key)
         db.session.add(row)
     row.content_hash = h
     row.qdrant_document_id = new_doc_id
     row.original_filename = filename
     row.status = "completed"
     row.last_error = None
-    db.session.commit()
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        row = _find_source_document_row(url_fetch) or _find_source_document_row(
+            url_fetch, content_hash=h
+        )
+        if row is None:
+            raise
+        row.content_hash = h
+        row.qdrant_document_id = new_doc_id
+        row.original_filename = filename
+        row.status = "completed"
+        row.last_error = None
+        db.session.commit()
 
     out = {
         "status": "ingested",
-        "source_url": url,
+        "source_url": url_fetch,
         "content_hash": h,
         "document_id": new_doc_id,
         "chunks_indexed": result.get("chunks_indexed"),
@@ -143,11 +205,19 @@ def ingest_documents_for_zone(app: Flask, record: ZoningRecord) -> list[dict[str
                 urls.extend(str(u).strip() for u in parsed if str(u).strip())
         except json.JSONDecodeError:
             pass
+    seen_keys: set[str] = set()
+    deduped: list[str] = []
+    for u in urls:
+        key = canonical_source_url(u)
+        if key in seen_keys:
+            continue
+        seen_keys.add(key)
+        deduped.append(u)
     municipality = record.municipality
     zone_code = record.zone_code
     source_object_id = record.source_object_id
     results: list[dict[str, Any]] = []
-    for u in urls:
+    for u in deduped:
         if looks_like_pdf_url(u) or u.lower().endswith(".pdf"):
             results.append(
                 ingest_pdf_url_to_qdrant(

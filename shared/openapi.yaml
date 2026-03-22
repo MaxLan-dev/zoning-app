@@ -76,5 +76,33 @@ paths:
       operationId: postIngestPdfUrl
   /api/v1/rag:
     post:
-      summary: RAG with optional municipality, zone_code, source_object_id filters
+      summary: RAG with optional zone filters; tiered retrieval widens to zone then municipality when hits are sparse
       operationId: postRag
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                q:
+                  type: string
+                limit:
+                  type: integer
+                municipality:
+                  type: string
+                zone_code:
+                  type: string
+                source_object_id:
+                  type: string
+                zone_type:
+                  type: string
+                  description: Improves municipality-wide retrieval tier (open data category)
+                zone_name:
+                  type: string
+                  description: Improves municipality-wide retrieval tier (open data label)
+                document_id:
+                  type: string
+                document_ids:
+                  type: array
+                  items:
+                    type: string

@@ -1,5 +1,7 @@
 import L from 'leaflet'
-import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import DOMPurify from 'dompurify'
+import { marked } from 'marked'
 import { GeoJSON, MapContainer, TileLayer, useMap, ZoomControl } from 'react-leaflet'
 import type { Feature, FeatureCollection, GeoJsonObject } from 'geojson'
 import {
@@ -13,6 +15,7 @@ import {
   MapPin,
   RefreshCw,
   Sparkles,
+  Upload,
 } from 'lucide-react'
 import 'leaflet/dist/leaflet.css'
 import './App.css'
@@ -103,6 +106,10 @@ type UploadResult = {
   uploaded_at: string
   collection: string
 }
+
+type UploadRowOutcome =
+  | { ok: true; result: UploadResult }
+  | { ok: false; filename: string; message: string }
 
 type IngestResultRow = {
   status?: string
@@ -209,7 +216,7 @@ function formatRagError(message: string) {
 
 function formatAnalyzeError(message: string) {
   if (message.includes('ingest_failed')) {
-    return 'The app could not index linked zoning PDFs for this area. You can still browse the open-data record or upload a document manually below.'
+    return 'The app could not index linked zoning PDFs for this area. You can still browse the open-data record or upload PDFs using Upload PDFs in the zone panel.'
   }
   return formatRagError(message)
 }
@@ -248,41 +255,52 @@ function featureLabel(feature?: Feature | null) {
   return name ? `${code} · ${name} (${municipality})` : `${code} · ${municipality}`
 }
 
-function FormattedRagAnswer({ text }: { text: string }) {
-  const paragraphs = text
-    .split(/\n{2,}/)
-    .map((p) => p.trim())
-    .filter(Boolean)
-  return (
-    <div className="rag-prose">
-      {paragraphs.map((para, i) => {
-        const lines = para.split('\n')
-        const nonEmpty = lines.map((l) => l.trim()).filter(Boolean)
-        const allBullets =
-          nonEmpty.length > 1 &&
-          nonEmpty.every((l) => /^(\d+[\).]|[•\-*])\s/.test(l))
-        if (allBullets) {
-          return (
-            <ul key={i} className="rag-list">
-              {nonEmpty.map((l, j) => (
-                <li key={j}>{l.replace(/^(\d+[\).]|[•\-*])\s+/, '')}</li>
-              ))}
-            </ul>
-          )
-        }
-        return (
-          <p key={i}>
-            {lines.map((line, j) => (
-              <Fragment key={j}>
-                {line}
-                {j < lines.length - 1 ? <br /> : null}
-              </Fragment>
-            ))}
-          </p>
-        )
-      })}
-    </div>
-  )
+marked.setOptions({ gfm: true, breaks: true })
+
+;(() => {
+  DOMPurify.addHook('afterSanitizeAttributes', (node) => {
+    if (node.tagName !== 'A') return
+    const href = node.getAttribute('href')
+    if (href && /^https?:\/\//i.test(href)) {
+      node.setAttribute('target', '_blank')
+      node.setAttribute('rel', 'noreferrer noopener')
+    }
+  })
+})()
+
+const RAG_SANITIZE = {
+  ALLOWED_TAGS: [
+    'p',
+    'br',
+    'strong',
+    'em',
+    'b',
+    'i',
+    'ul',
+    'ol',
+    'li',
+    'h1',
+    'h2',
+    'h3',
+    'h4',
+    'h5',
+    'h6',
+    'code',
+    'pre',
+    'blockquote',
+    'a',
+    'hr',
+  ],
+  ALLOWED_ATTR: ['href', 'target', 'rel'],
+}
+
+function RagMarkdown({ text }: { text: string }) {
+  const html = useMemo(() => {
+    const raw = marked.parse((text || '').trim()) as string
+    return DOMPurify.sanitize(raw, RAG_SANITIZE)
+  }, [text])
+  if (!html) return null
+  return <div className="rag-prose rag-md" dangerouslySetInnerHTML={{ __html: html }} />
 }
 
 function geoJsonStyle(feature?: Feature): L.PathOptions {
@@ -347,8 +365,18 @@ export default function App() {
   const [ragError, setRagError] = useState<string | null>(null)
 
   const [uploadBusy, setUploadBusy] = useState(false)
-  const [uploadResult, setUploadResult] = useState<UploadResult | null>(null)
+  const [uploadResults, setUploadResults] = useState<UploadRowOutcome[]>([])
   const [uploadError, setUploadError] = useState<string | null>(null)
+  const [uploadDragActive, setUploadDragActive] = useState(false)
+  const uploadInputRef = useRef<HTMLInputElement>(null)
+
+  const uploadDocumentIds = useMemo(
+    () =>
+      uploadResults
+        .filter((o): o is { ok: true; result: UploadResult } => o.ok)
+        .map((o) => o.result.document_id),
+    [uploadResults],
+  )
 
   const selected = matches[matchPick] ?? null
   const promptChips = useMemo(() => {
@@ -665,11 +693,17 @@ export default function App() {
     setRagError(null)
     try {
       const body: Record<string, unknown> = { q, limit: 8 }
-      if (uploadResult?.document_id) body.document_id = uploadResult.document_id
+      if (uploadDocumentIds.length === 1) {
+        body.document_id = uploadDocumentIds[0]
+      } else if (uploadDocumentIds.length > 1) {
+        body.document_ids = uploadDocumentIds
+      }
       if (selected) {
         body.municipality = selected.municipality
         body.zone_code = selected.zoneCode
         body.source_object_id = selected.sourceObjectId
+        if (selected.zoneType) body.zone_type = selected.zoneType
+        if (selected.zoneName) body.zone_name = selected.zoneName
       }
       const res = await fetch(API.rag, {
         method: 'POST',
@@ -687,26 +721,56 @@ export default function App() {
     } finally {
       setRagLoading(false)
     }
-  }, [ragQuestion, selected, uploadResult?.document_id])
+  }, [ragQuestion, selected, uploadDocumentIds])
 
   async function onUpload(files: FileList | null) {
-    const f = files?.[0]
-    if (!f) return
+    if (!files?.length) return
+    const pdfs = Array.from(files).filter((f) => f.name.toLowerCase().endsWith('.pdf'))
+    if (!pdfs.length) {
+      setUploadError('No PDF files selected.')
+      setUploadResults([])
+      return
+    }
     setUploadBusy(true)
     setUploadError(null)
-    setUploadResult(null)
-    const fd = new FormData()
-    fd.append('file', f)
+    setUploadResults([])
+    const outcomes: UploadRowOutcome[] = []
     try {
-      const res = await fetch(API.documentsUpload, { method: 'POST', body: fd })
-      const data = (await res.json()) as UploadResult & { message?: string; error?: string }
-      if (!res.ok) {
-        setUploadError(data.message ?? data.error ?? `Upload failed (${res.status})`)
-        return
+      for (const f of pdfs) {
+        const fd = new FormData()
+        fd.append('file', f)
+        try {
+          const res = await fetch(API.documentsUpload, { method: 'POST', body: fd })
+          const data = (await res.json()) as UploadResult & { message?: string; error?: string }
+          if (!res.ok) {
+            outcomes.push({
+              ok: false,
+              filename: f.name,
+              message: data.message ?? data.error ?? `HTTP ${res.status}`,
+            })
+            continue
+          }
+          if (data.error === 'no_extractable_text') {
+            outcomes.push({
+              ok: false,
+              filename: f.name,
+              message: data.message ?? 'No extractable text in this PDF.',
+            })
+            continue
+          }
+          outcomes.push({ ok: true, result: data as UploadResult })
+        } catch {
+          outcomes.push({ ok: false, filename: f.name, message: 'Network error.' })
+        }
       }
-      setUploadResult(data as UploadResult)
-    } catch {
-      setUploadError('Upload failed (network).')
+      setUploadResults(outcomes)
+      const okCount = outcomes.filter((o) => o.ok).length
+      const failCount = outcomes.length - okCount
+      if (failCount === outcomes.length) {
+        setUploadError('Every selected file failed to index.')
+      } else if (failCount > 0) {
+        setUploadError('Some files failed to index — see details below.')
+      }
     } finally {
       setUploadBusy(false)
     }
@@ -1057,14 +1121,14 @@ export default function App() {
             </section>
           ) : (
             <div className="side-stack">
-              <section className="info-card">
-                <h2 className="h2">How to use this</h2>
+              <details className="info-card info-card--fold">
+                <summary className="info-card__summary">How to use this</summary>
                 <ol className="steps">
                   <li>Click a zoning polygon on the map to load the selected zone.</li>
                   <li>Review the AI summary and core zoning metadata.</li>
                   <li>Open follow-up questions or documents only when needed.</li>
                 </ol>
-              </section>
+              </details>
 
               <div className="side-status">
                 <h2 className="h2">Selected zone</h2>
@@ -1201,6 +1265,7 @@ export default function App() {
                     Inspect API data
                   </button>
                 </div>
+
                 {analyzeLoading && (
                   <div className="callout callout--wait">
                     <Loader2 size={18} className="spin" />
@@ -1235,31 +1300,35 @@ export default function App() {
                     )}
                     {analyzeData.rag.answer && (
                       <div className="rag-answer rag-answer--hero">
-                        <FormattedRagAnswer text={analyzeData.rag.answer} />
+                        <RagMarkdown text={analyzeData.rag.answer} />
                         {analyzeData.rag.model && (
                           <p className="muted small rag-model">Model: {analyzeData.rag.model}</p>
                         )}
                       </div>
                     )}
                     {analyzeData.rag.sources && analyzeData.rag.sources.length > 0 && (
-                      <div className="sources-block">
-                        <h4 className="h4">Sources used</h4>
-                        <ol className="sources">
-                          {analyzeData.rag.sources.map((s, i) => (
-                            <li key={i}>
-                              <strong>{s.human_label ?? `Passage ${i + 1}`}</strong>
-                              {s.page != null && <> · p.{s.page}</>}
-                              {s.source_url && (
-                                <div>
-                                  <a href={s.source_url} target="_blank" rel="noreferrer">
-                                    {s.source_url}
-                                  </a>
-                                </div>
-                              )}
-                            </li>
-                          ))}
-                        </ol>
-                      </div>
+                      <details className="sources-fold">
+                        <summary>
+                          Sources used ({analyzeData.rag.sources.length})
+                        </summary>
+                        <div className="sources-fold__body">
+                          <ol className="sources">
+                            {analyzeData.rag.sources.map((s, i) => (
+                              <li key={i}>
+                                <strong>{s.human_label ?? `Passage ${i + 1}`}</strong>
+                                {s.page != null && <> · p.{s.page}</>}
+                                {s.source_url && (
+                                  <div>
+                                    <a href={s.source_url} target="_blank" rel="noreferrer">
+                                      {s.source_url}
+                                    </a>
+                                  </div>
+                                )}
+                              </li>
+                            ))}
+                          </ol>
+                        </div>
+                      </details>
                     )}
                   </>
                 )}
@@ -1268,191 +1337,241 @@ export default function App() {
                 )}
               </section>
 
-                  <details className="side-fold" open>
-                    <summary>Follow-up questions</summary>
-                    <div className="side-fold__body">
-                      <p className="muted small">
-                        Default insights come from <code>POST …/analyze</code>. Ask another question
-                        with <code>POST {API.rag}</code>
-                        {selected
-                          ? ` — zone context: ${selected.zoneCode} (${titleCaseMunicipality(selected.municipality)})`
-                          : ' — click a polygon first for zone-aware answers'}
-                        .
-                      </p>
-                      <div className="prompt-row">
-                        {promptChips.map((prompt) => (
-                          <button
-                            key={prompt}
-                            type="button"
-                            className="prompt-chip"
-                            onClick={() => setRagQuestion(prompt)}
-                          >
-                            {prompt}
-                          </button>
-                        ))}
-                      </div>
-                      <textarea
-                        className="textarea"
-                        rows={3}
-                        value={ragQuestion}
-                        onChange={(e) => setRagQuestion(e.target.value)}
-                        placeholder="Ask about permitted uses, setbacks, parking, density, or what bylaw sections to read first."
-                      />
-                      <button
-                        type="button"
-                        className="btn btn--primary"
-                        disabled={ragLoading}
-                        onClick={() => void runRag()}
+              <details className="side-fold zone-tools-fold">
+                <summary>More tools · uploads, follow-up, links</summary>
+                <div className="zone-tools-fold__body">
+                  <section
+                    className="zone-section zone-section--upload-card zone-section--tools-nested"
+                    aria-label="Upload PDF documents"
+                  >
+                    <h3 className="h3">
+                      <Upload size={16} strokeWidth={2} aria-hidden /> Upload PDFs
+                    </h3>
+                    <p className="muted small zone-lede">
+                      Drop files here or click to choose. Multiple PDFs are indexed one after another; Ask uses
+                      your uploaded docs for this session.
+                    </p>
+                    <div
+                      className={`upload-surface${uploadDragActive ? ' upload-surface--drag' : ''}${
+                        uploadBusy ? ' upload-surface--busy' : ''
+                      }`}
+                      onDragEnter={(e) => {
+                        e.preventDefault()
+                        e.stopPropagation()
+                        if (!uploadBusy) setUploadDragActive(true)
+                      }}
+                      onDragLeave={(e) => {
+                        e.preventDefault()
+                        e.stopPropagation()
+                        const next = e.relatedTarget as Node | null
+                        if (next && e.currentTarget.contains(next)) return
+                        setUploadDragActive(false)
+                      }}
+                      onDragOver={(e) => {
+                        e.preventDefault()
+                        e.stopPropagation()
+                      }}
+                      onDrop={(e) => {
+                        e.preventDefault()
+                        e.stopPropagation()
+                        setUploadDragActive(false)
+                        if (!uploadBusy) void onUpload(e.dataTransfer.files)
+                      }}
+                    >
+                      <label
+                        className={`upload-dropzone upload-dropzone--prominent${uploadBusy ? ' upload-dropzone--disabled' : ''}`}
                       >
-                        {ragLoading ? <Loader2 size={16} className="spin" /> : <Sparkles size={16} />}
-                        Ask
-                      </button>
-                      {ragError && <p className="err">{ragError}</p>}
-                      {ragData?.answer && (
-                        <div className="rag-answer">
-                          <FormattedRagAnswer text={ragData.answer} />
-                          {ragData.model && (
-                            <p className="muted small">Model: {ragData.model}</p>
-                          )}
-                          {ragData.sources && ragData.sources.length > 0 && (
-                            <div>
-                              <h3 className="h3">Sources</h3>
-                              <ol className="sources">
-                                {ragData.sources.map((s, i) => (
-                                  <li key={i}>
-                                    <strong>{s.human_label ?? `Passage ${i + 1}`}</strong>
-                                    {s.page != null && <> · p.{s.page}</>}
-                                    {s.score != null && (
-                                      <> · score {typeof s.score === 'number' ? s.score.toFixed(3) : s.score}</>
-                                    )}
-                                    {s.source_url && (
-                                      <div>
-                                        <a href={s.source_url} target="_blank" rel="noreferrer">
-                                          {s.source_url}
-                                        </a>
-                                      </div>
-                                    )}
-                                  </li>
-                                ))}
-                              </ol>
-                            </div>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  </details>
-
-                  <details className="side-fold">
-                    <summary>Sources and documents</summary>
-                    <div className="side-fold__body">
-                      <section className="zone-section zone-section--compact">
-                        <h3 className="h3">Official city websites</h3>
-                        {(selected.publicResources?.length ?? 0) > 0 ? (
-                          <ul className="resource-links">
-                            {selected.publicResources!.map((r) => (
-                              <li key={r.url}>
-                                <a href={r.url} target="_blank" rel="noreferrer">
-                                  {r.label} <ExternalLink size={12} />
-                                </a>
-                              </li>
-                            ))}
-                          </ul>
-                        ) : (
-                          <p className="muted small">No curated links for this municipality slug.</p>
-                        )}
-                      </section>
-
-                      <section className="zone-section zone-section--compact">
-                        <h3 className="h3">Bylaw PDFs from GIS metadata</h3>
-                        {selected.sourceDocuments?.length ? (
-                          <ul className="link-list">
-                            {selected.sourceDocuments.map((u) => (
-                              <li key={u}>
-                                <a href={u} target="_blank" rel="noreferrer">
-                                  {u.replace(/^https?:\/\//, '').slice(0, 72)}
-                                  {u.length > 72 ? '…' : ''}
-                                </a>
-                              </li>
-                            ))}
-                          </ul>
-                        ) : (
-                          <div className="callout callout--info">
-                            <p>
-                              <strong>No PDF URLs on this record.</strong> Waterloo and Kitchener zoning
-                              layers usually store zone codes and labels, not direct bylaw PDF links, so there
-                              is nothing to auto-ingest until we add municipal PDFs to the index (or you
-                              upload a file below).
-                            </p>
-                          </div>
-                        )}
-                      </section>
-                    </div>
-                  </details>
-
-                  <details className="side-fold">
-                    <summary>Upload your own PDF</summary>
-                    <div className="side-fold__body">
-                      <p className="muted small">
-                        <code>POST {API.documentsUpload}</code> — optional; adds a dedicated{' '}
-                        <code>document_id</code> filter for RAG when you want to search one uploaded document.
-                      </p>
-                      <label className="upload-dropzone">
                         <input
+                          ref={uploadInputRef}
                           type="file"
                           accept="application/pdf,.pdf"
+                          multiple
                           disabled={uploadBusy}
-                          onChange={(e) => void onUpload(e.target.files)}
+                          onChange={(e) => {
+                            void onUpload(e.target.files)
+                            e.target.value = ''
+                          }}
                         />
+                        <span className="upload-dropzone__icon" aria-hidden>
+                          <Upload size={28} strokeWidth={1.75} />
+                        </span>
                         <span className="upload-dropzone__title">
-                          {uploadBusy ? 'Uploading and indexing PDF…' : 'Choose a PDF to index'}
+                          {uploadBusy ? 'Uploading and indexing…' : 'Drop PDFs here or click to browse'}
                         </span>
-                        <span className="upload-dropzone__meta">
-                          Use this when the zone record has no linked bylaw PDF or you want to search one document directly.
-                        </span>
+                        <span className="upload-dropzone__meta">PDF only · multiple files supported</span>
                       </label>
-                      {uploadError && <p className="err">{uploadError}</p>}
-                      {uploadResult && (
-                        <div className="callout callout--success">
-                          <p>
-                            <strong>{uploadResult.original_filename}</strong> indexed successfully.
-                          </p>
-                          <p className="small">
-                            {uploadResult.chunks_indexed} chunks · <code>{uploadResult.document_id}</code>
-                          </p>
-                        </div>
-                      )}
                     </div>
-                  </details>
+                    {uploadError && <p className="err">{uploadError}</p>}
+                    {uploadResults.length > 0 && (
+                      <ul className="upload-results-list">
+                        {uploadResults.map((row, i) =>
+                          row.ok ? (
+                            <li key={`${row.result.document_id}-${i}`}>
+                              <div className="callout callout--success callout--compact">
+                                <p>
+                                  <strong>{row.result.original_filename}</strong> indexed successfully.
+                                </p>
+                                <p className="small">
+                                  {row.result.chunks_indexed} chunks · <code>{row.result.document_id}</code>
+                                </p>
+                              </div>
+                            </li>
+                          ) : (
+                            <li key={`${row.filename}-${i}`}>
+                              <p className="err small">
+                                <strong>{row.filename}</strong>: {row.message}
+                              </p>
+                            </li>
+                          ),
+                        )}
+                      </ul>
+                    )}
+                  </section>
 
-                  <details className="side-fold">
-                    <summary>Technical details</summary>
-                    <div className="side-fold__body">
-                      <p className="muted small">
-                        <a href={API.zone(selected.id)} target="_blank" rel="noreferrer">
-                          GET {API.zone(selected.id)} <ExternalLink size={12} />
-                        </a>
-                      </p>
-                      {analyzeData?.ingest?.results && analyzeData.ingest.results.length > 0 && (
-                        <ul className="ingest-list ingest-list--compact">
-                          {analyzeData.ingest.results.map((row, i) => (
-                            <li key={i}>
-                              <span className={`tag tag--${row.status ?? 'unknown'}`}>
-                                {row.status ?? '?'}
-                              </span>{' '}
-                              {row.source_url && (
-                                <span className="muted small">{row.source_url.slice(0, 48)}…</span>
-                              )}
-                              {row.document_id && (
-                                <div>
-                                  <code className="inline-code">{row.document_id}</code>
-                                </div>
-                              )}
+                  <div className="zone-tools-sub">
+                    <h3 className="h3">Follow-up questions</h3>
+                    <p className="muted small">
+                      Default insights come from <code>POST …/analyze</code>. Ask another question with{' '}
+                      <code>POST {API.rag}</code>
+                      {selected
+                        ? ` — zone context: ${selected.zoneCode} (${titleCaseMunicipality(selected.municipality)})`
+                        : ' — click a polygon first for zone-aware answers'}
+                      .
+                    </p>
+                    <div className="prompt-row">
+                      {promptChips.map((prompt) => (
+                        <button
+                          key={prompt}
+                          type="button"
+                          className="prompt-chip"
+                          onClick={() => setRagQuestion(prompt)}
+                        >
+                          {prompt}
+                        </button>
+                      ))}
+                    </div>
+                    <textarea
+                      className="textarea"
+                      rows={3}
+                      value={ragQuestion}
+                      onChange={(e) => setRagQuestion(e.target.value)}
+                      placeholder="Ask about permitted uses, setbacks, parking, density, or what bylaw sections to read first."
+                    />
+                    <button
+                      type="button"
+                      className="btn btn--primary"
+                      disabled={ragLoading}
+                      onClick={() => void runRag()}
+                    >
+                      {ragLoading ? <Loader2 size={16} className="spin" /> : <Sparkles size={16} />}
+                      Ask
+                    </button>
+                    {ragError && <p className="err">{ragError}</p>}
+                    {ragData?.answer && (
+                      <div className="rag-answer">
+                        <RagMarkdown text={ragData.answer} />
+                        {ragData.model && <p className="muted small">Model: {ragData.model}</p>}
+                        {ragData.sources && ragData.sources.length > 0 && (
+                          <div>
+                            <h4 className="h4">Sources</h4>
+                            <ol className="sources">
+                              {ragData.sources.map((s, i) => (
+                                <li key={i}>
+                                  <strong>{s.human_label ?? `Passage ${i + 1}`}</strong>
+                                  {s.page != null && <> · p.{s.page}</>}
+                                  {s.score != null && (
+                                    <> · score {typeof s.score === 'number' ? s.score.toFixed(3) : s.score}</>
+                                  )}
+                                  {s.source_url && (
+                                    <div>
+                                      <a href={s.source_url} target="_blank" rel="noreferrer">
+                                        {s.source_url}
+                                      </a>
+                                    </div>
+                                  )}
+                                </li>
+                              ))}
+                            </ol>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="zone-tools-sub">
+                    <h3 className="h3">Sources and documents</h3>
+                    <section className="zone-section zone-section--compact">
+                      <h4 className="h4">Official city websites</h4>
+                      {(selected.publicResources?.length ?? 0) > 0 ? (
+                        <ul className="resource-links">
+                          {selected.publicResources!.map((r) => (
+                            <li key={r.url}>
+                              <a href={r.url} target="_blank" rel="noreferrer">
+                                {r.label} <ExternalLink size={12} />
+                              </a>
                             </li>
                           ))}
                         </ul>
+                      ) : (
+                        <p className="muted small">No curated links for this municipality slug.</p>
                       )}
-                    </div>
-                  </details>
+                    </section>
+
+                    <section className="zone-section zone-section--compact">
+                      <h4 className="h4">Bylaw PDFs from GIS metadata</h4>
+                      {selected.sourceDocuments?.length ? (
+                        <ul className="link-list">
+                          {selected.sourceDocuments.map((u) => (
+                            <li key={u}>
+                              <a href={u} target="_blank" rel="noreferrer">
+                                {u.replace(/^https?:\/\//, '').slice(0, 72)}
+                                {u.length > 72 ? '…' : ''}
+                              </a>
+                            </li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <div className="callout callout--info">
+                          <p>
+                            <strong>No PDF URLs on this record.</strong> Waterloo and Kitchener zoning layers
+                            usually store zone codes and labels, not direct bylaw PDF links, so there is nothing
+                            to auto-ingest until we add municipal PDFs to the index (or use Upload PDFs in this
+                            sidebar).
+                          </p>
+                        </div>
+                      )}
+                    </section>
+                  </div>
+
+                  <div className="zone-tools-sub">
+                    <h3 className="h3">Technical details</h3>
+                    <p className="muted small">
+                      <a href={API.zone(selected.id)} target="_blank" rel="noreferrer">
+                        GET {API.zone(selected.id)} <ExternalLink size={12} />
+                      </a>
+                    </p>
+                    {analyzeData?.ingest?.results && analyzeData.ingest.results.length > 0 && (
+                      <ul className="ingest-list ingest-list--compact">
+                        {analyzeData.ingest.results.map((row, i) => (
+                          <li key={i}>
+                            <span className={`tag tag--${row.status ?? 'unknown'}`}>
+                              {row.status ?? '?'}
+                            </span>{' '}
+                            {row.source_url && (
+                              <span className="muted small">{row.source_url.slice(0, 48)}…</span>
+                            )}
+                            {row.document_id && (
+                              <div>
+                                <code className="inline-code">{row.document_id}</code>
+                              </div>
+                            )}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                </div>
+              </details>
                 </div>
               )}
             </div>
@@ -1628,7 +1747,7 @@ export default function App() {
                   )}
                   {analyzeData.rag.answer && (
                     <div className="rag-answer rag-answer--panel">
-                      <FormattedRagAnswer text={analyzeData.rag.answer} />
+                      <RagMarkdown text={analyzeData.rag.answer} />
                       {analyzeData.rag.model && (
                         <p className="muted small">Model: {analyzeData.rag.model}</p>
                       )}

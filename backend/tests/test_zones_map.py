@@ -139,14 +139,18 @@ def test_zone_analyze_returns_record_and_ingest(client, app, monkeypatch):
         "app.api.zones.ingest_documents_for_zone",
         lambda _app, _rec: [{"status": "skipped", "source_url": "https://x/y.pdf"}],
     )
-    monkeypatch.setattr(
-        "app.services.rag.run_rag",
-        lambda *_a, **_kw: {
+    rag_kw: dict = {}
+
+    def _capture_rag(*_a, **kw):
+        rag_kw.clear()
+        rag_kw.update(kw)
+        return {
             "answer": "Test answer.",
             "sources": [],
             "model": "test-model",
-        },
-    )
+        }
+
+    monkeypatch.setattr("app.services.rag.run_rag", _capture_rag)
 
     app.config["GROQ_API_KEY"] = "test-key"
 
@@ -158,6 +162,10 @@ def test_zone_analyze_returns_record_and_ingest(client, app, monkeypatch):
     assert data["ingest"]["results"][0]["status"] == "skipped"
     assert data["ingest"]["summary"]["linkedPdfUrlsInOpenData"] == 1
     assert data["rag"]["answer"] == "Test answer."
+    assert "zone_context" in rag_kw
+    assert rag_kw["zone_code"] == "Z9"
+    assert "Z9" in (rag_kw.get("zone_context") or "")
+    assert "waterloo" in (rag_kw.get("zone_context") or "")
 
 
 def test_region_summary_counts(client, app):
