@@ -61,10 +61,21 @@ def test_scrape_links_returns_result(client, monkeypatch):
 
 
 def test_scrape_geojson_returns_feature_collection(client, monkeypatch):
-    def fake_geojson(*, source_url, geojson_url, allowed_domains):
+    def fake_geojson(
+        *,
+        source_url,
+        geojson_url,
+        allowed_domains,
+        paginate,
+        page_size,
+        max_pages,
+    ):
         assert source_url == "https://example.org/maps"
         assert geojson_url is None
         assert allowed_domains == {"example.org"}
+        assert paginate is True
+        assert page_size == 500
+        assert max_pages == 10
         return GeoJSONResult(
             source_url=source_url,
             geojson_url="https://example.org/data/neighborhoods.geojson",
@@ -94,6 +105,8 @@ def test_scrape_geojson_returns_feature_collection(client, monkeypatch):
             "allowedDomains": ["example.org"],
             "maxFeatures": 1,
             "propertyKeys": ["name"],
+            "pageSize": 500,
+            "maxPages": 10,
         },
     )
     assert res.status_code == 200
@@ -105,7 +118,15 @@ def test_scrape_geojson_returns_feature_collection(client, monkeypatch):
 
 
 def test_scrape_geojson_validation_error(client, monkeypatch):
-    def fake_geojson(*, source_url, geojson_url, allowed_domains):
+    def fake_geojson(
+        *,
+        source_url,
+        geojson_url,
+        allowed_domains,
+        paginate,
+        page_size,
+        max_pages,
+    ):
         raise ValueError("No GeoJSON URLs were discovered for the provided source URL")
 
     monkeypatch.setattr("app.api.scrape.scrape_geojson_data", fake_geojson)
@@ -113,3 +134,12 @@ def test_scrape_geojson_validation_error(client, monkeypatch):
     res = client.post("/api/v1/scrape/geojson", json={"url": "https://example.org"})
     assert res.status_code == 422
     assert "No GeoJSON URLs" in res.get_json()["error"]
+
+
+def test_scrape_geojson_invalid_page_size(client):
+    res = client.post(
+        "/api/v1/scrape/geojson",
+        json={"url": "https://example.org", "pageSize": 0},
+    )
+    assert res.status_code == 400
+    assert "pageSize" in res.get_json()["error"]

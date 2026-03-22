@@ -61,17 +61,22 @@ def scrape_geojson():
 
     try:
         max_features = _coerce_max_features(payload.get("maxFeatures"))
+        allowed_domains = _coerce_set(payload.get("allowedDomains"))
+        property_keys = _coerce_patterns(payload.get("propertyKeys"))
+        paginate = _coerce_bool(payload.get("paginate"), default=True)
+        page_size = _coerce_page_size(payload.get("pageSize"))
+        max_pages = _coerce_max_pages(payload.get("maxPages"))
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
-
-    allowed_domains = _coerce_set(payload.get("allowedDomains"))
-    property_keys = _coerce_patterns(payload.get("propertyKeys"))
 
     try:
         result = scrape_geojson_data(
             source_url=url.strip(),
             geojson_url=geojson_url.strip() if isinstance(geojson_url, str) else None,
             allowed_domains=allowed_domains,
+            paginate=paginate,
+            page_size=page_size,
+            max_pages=max_pages,
         )
         return jsonify(result.as_json(max_features=max_features, property_keys=property_keys))
     except ValueError as exc:
@@ -137,4 +142,32 @@ def _coerce_max_features(raw: object) -> int | None:
         raise ValueError("`maxFeatures` must be an integer")
     if raw < 1 or raw > 10_000:
         raise ValueError("`maxFeatures` must be between 1 and 10000")
+    return raw
+
+
+def _coerce_bool(raw: object, *, default: bool) -> bool:
+    if raw is None:
+        return default
+    if isinstance(raw, bool):
+        return raw
+    raise ValueError("Boolean options must be true or false")
+
+
+def _coerce_page_size(raw: object) -> int | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, int):
+        raise ValueError("`pageSize` must be an integer")
+    if raw < 1 or raw > 5000:
+        raise ValueError("`pageSize` must be between 1 and 5000")
+    return raw
+
+
+def _coerce_max_pages(raw: object) -> int:
+    if raw is None:
+        return 25
+    if not isinstance(raw, int):
+        raise ValueError("`maxPages` must be an integer")
+    if raw < 1 or raw > 1000:
+        raise ValueError("`maxPages` must be between 1 and 1000")
     return raw
