@@ -15,6 +15,7 @@ from qdrant_client.models import (
     Filter,
     FilterSelector,
     MatchValue,
+    PayloadSchemaType,
     PointStruct,
     VectorParams,
 )
@@ -45,6 +46,12 @@ def _chunk_text(text: str, chunk_size: int, overlap: int) -> list[str]:
 
 
 _model_cache: dict[str, Any] = {}
+_KEYWORD_PAYLOAD_INDEX_FIELDS: tuple[str, ...] = (
+    "document_id",
+    "municipality",
+    "zone_code",
+    "source_object_id",
+)
 
 
 def _get_sentence_model(model_name: str):
@@ -53,6 +60,25 @@ def _get_sentence_model(model_name: str):
 
         _model_cache[model_name] = SentenceTransformer(model_name)
     return _model_cache[model_name]
+
+
+def ensure_qdrant_payload_indexes(client: QdrantClient, collection_name: str) -> None:
+    """
+    Ensure keyword payload indexes exist for the fields we filter on in Qdrant.
+
+    Older/local collections may have points with these payload keys but no index yet,
+    which causes filtered queries to fail with "Index required but not found".
+    """
+    if not client.collection_exists(collection_name=collection_name):
+        return
+
+    for field_name in _KEYWORD_PAYLOAD_INDEX_FIELDS:
+        client.create_payload_index(
+            collection_name=collection_name,
+            field_name=field_name,
+            field_schema=PayloadSchemaType.KEYWORD,
+            wait=True,
+        )
 
 
 def _page_texts_from_pdf_bytes(pdf_bytes: bytes) -> tuple[list[tuple[int, str]], int, list[str]]:
@@ -187,6 +213,7 @@ def ingest_pdf_bytes_to_qdrant(
             collection_name=collection,
             vectors_config=VectorParams(size=dim, distance=Distance.COSINE),
         )
+    ensure_qdrant_payload_indexes(client, collection)
 
     points = [
         PointStruct(

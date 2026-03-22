@@ -6,7 +6,7 @@ from flask import Flask
 from qdrant_client import QdrantClient
 from qdrant_client.models import FieldCondition, Filter, MatchValue
 
-from app.services.pdf_vector_ingest import _get_sentence_model
+from app.services.pdf_vector_ingest import _get_sentence_model, ensure_qdrant_payload_indexes
 
 
 def semantic_search(
@@ -34,6 +34,7 @@ def semantic_search(
         prefer_grpc=False,
     )
     collection = app.config["QDRANT_COLLECTION"]
+    ensure_qdrant_payload_indexes(client, collection)
 
     must: list[FieldCondition] = []
     if document_id:
