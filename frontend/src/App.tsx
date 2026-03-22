@@ -59,6 +59,7 @@ type ZoneMatch = {
   sourceObjectId: string
   sourceDocuments: string[]
   publicResources?: PublicResource[]
+  geometry?: unknown
   sourceUrl?: string
   geojsonUrl?: string
   lastRunId?: string | null
@@ -126,6 +127,15 @@ type AnalyzeResponse = {
   rag: RagRes & { query?: string }
 }
 
+type ZoneFeatureProperties = {
+  id?: number
+  municipality?: string
+  zoneCode?: string
+  zoneName?: string | null
+  zoneType?: string | null
+  sourceObjectId?: string
+}
+
 function geometrySummary(geometry: unknown): string {
   if (geometry == null) return '—'
   if (typeof geometry !== 'object' || geometry === null) return 'present'
@@ -156,6 +166,28 @@ function formatRagError(message: string) {
     return 'RAG is not configured yet. Add `GROQ_API_KEY` in the repo-root `.env` file and restart the backend.'
   }
   return message
+}
+
+function formatAnalyzeError(message: string) {
+  if (message.includes('ingest_failed')) {
+    return 'The app could not index linked zoning PDFs for this area. You can still browse the open-data record or upload a document manually below.'
+  }
+  return formatRagError(message)
+}
+
+function getFeatureProps(feature?: Feature | null): ZoneFeatureProperties {
+  if (!feature || !feature.properties || typeof feature.properties !== 'object') {
+    return {}
+  }
+  return feature.properties as ZoneFeatureProperties
+}
+
+function featureLabel(feature?: Feature | null) {
+  const props = getFeatureProps(feature)
+  const code = props.zoneCode || 'Unknown zone'
+  const name = props.zoneName?.trim()
+  const municipality = props.municipality ? titleCaseMunicipality(props.municipality) : 'Unknown municipality'
+  return name ? `${code} · ${name} (${municipality})` : `${code} · ${municipality}`
 }
 
 function FormattedRagAnswer({ text }: { text: string }) {
@@ -221,6 +253,11 @@ export default function App() {
   const [geojson, setGeojson] = useState<FeatureCollection | null>(null)
   const [geoLoading, setGeoLoading] = useState(true)
   const [geoError, setGeoError] = useState<string | null>(null)
+  const [zoneSearch, setZoneSearch] = useState('')
+  const [municipalityFilter, setMunicipalityFilter] = useState<'all' | 'waterloo' | 'kitchener'>(
+    'all',
+  )
+  const [hoveredZoneId, setHoveredZoneId] = useState<number | null>(null)
 
   const [atPointLoading, setAtPointLoading] = useState(false)
   const [atPointError, setAtPointError] = useState<string | null>(null)
@@ -231,6 +268,7 @@ export default function App() {
   const [analyzeLoading, setAnalyzeLoading] = useState(false)
   const [analyzeError, setAnalyzeError] = useState<string | null>(null)
   const [analyzeData, setAnalyzeData] = useState<AnalyzeResponse | null>(null)
+  const [analyzeCache, setAnalyzeCache] = useState<Record<number, AnalyzeResponse>>({})
   const [showApiPanel, setShowApiPanel] = useState(false)
   const [copyNote, setCopyNote] = useState<string | null>(null)
 
@@ -261,6 +299,51 @@ export default function App() {
     ]
   }, [selected])
 
+  const featureMatches = useCallback(
+    (feature?: Feature | null) => {
+      const props = getFeatureProps(feature)
+      const municipalityOk =
+        municipalityFilter === 'all' || props.municipality === municipalityFilter
+      const query = zoneSearch.trim().toLowerCase()
+      const text = [
+        props.zoneCode,
+        props.zoneName,
+        props.zoneType,
+        props.sourceObjectId,
+        props.municipality,
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase()
+      const searchOk = !query || text.includes(query)
+      return municipalityOk && searchOk
+    },
+    [municipalityFilter, zoneSearch],
+  )
+
+  const zoneSearchResults = useMemo(() => {
+    const features = geojson?.features ?? []
+    return features
+      .filter((feature) => featureMatches(feature))
+      .slice(0, 8)
+      .map((feature) => {
+        const props = getFeatureProps(feature)
+        return {
+          id: Number(props.id),
+          label: featureLabel(feature),
+          municipality: props.municipality ?? '',
+          zoneCode: props.zoneCode ?? '',
+        }
+      })
+      .filter((item) => Number.isFinite(item.id))
+  }, [featureMatches, geojson?.features])
+
+  const matchedFeatureCount = useMemo(() => {
+    const features = geojson?.features ?? []
+    if (!zoneSearch.trim() && municipalityFilter === 'all') return features.length
+    return features.filter((feature) => featureMatches(feature)).length
+  }, [featureMatches, geojson?.features, municipalityFilter, zoneSearch])
+
   const geoBounds = useMemo(() => {
     if (!geojson?.features?.length) return null
     const layer = L.geoJSON(geojson as GeoJsonObject)
@@ -268,6 +351,16 @@ export default function App() {
     layer.remove()
     return b.isValid() ? b : null
   }, [geojson])
+
+  const selectedBounds = useMemo(() => {
+    if (!selected?.geometry) return null
+    const layer = L.geoJSON(selected.geometry as GeoJsonObject)
+    const b = layer.getBounds()
+    layer.remove()
+    return b.isValid() ? b : null
+  }, [selected])
+
+  const hasActiveMapFilter = municipalityFilter !== 'all' || zoneSearch.trim().length > 0
 
   const loadDashboard = useCallback(async () => {
     const [h, s] = await Promise.allSettled([
@@ -314,6 +407,23 @@ export default function App() {
     void loadGeojson()
   }, [loadDashboard, loadGeojson])
 
+  const applyAnalyzeResponse = useCallback((data: AnalyzeResponse) => {
+    setAnalyzeData(data)
+    const rag = data.rag
+    setRagError(null)
+    if (rag.error) {
+      setRagData(null)
+      setRagError(formatRagError(rag.message ?? String(rag.error)))
+      return
+    }
+    setRagData({
+      query: rag.query,
+      answer: rag.answer,
+      sources: rag.sources,
+      model: rag.model,
+    })
+  }, [])
+
   const runAtPoint = useCallback(async (lat: number, lng: number) => {
     setAtPointLoading(true)
     setAtPointError(null)
@@ -338,10 +448,36 @@ export default function App() {
     }
   }, [])
 
-  const runAnalyze = useCallback(async (zoneId: number, customQ?: string) => {
+  const loadZoneById = useCallback(async (zoneId: number) => {
+    setAtPointLoading(true)
+    setAtPointError(null)
+    try {
+      const res = await fetch(API.zone(zoneId))
+      const data = (await res.json()) as { record?: ZoneMatch; error?: string; message?: string }
+      if (!res.ok || !data.record) {
+        setAtPointError(data.message ?? data.error ?? `HTTP ${res.status}`)
+        return
+      }
+      setMatches([data.record])
+      setMatchPick(0)
+      setClickLabel(`Zone ${data.record.zoneCode}`)
+    } catch {
+      setAtPointError('Could not load zone record.')
+    } finally {
+      setAtPointLoading(false)
+    }
+  }, [])
+
+  const runAnalyze = useCallback(async (zoneId: number, customQ?: string, force = false) => {
+    if (!customQ && !force && analyzeCache[zoneId]) {
+      applyAnalyzeResponse(analyzeCache[zoneId])
+      return
+    }
     setAnalyzeLoading(true)
     setAnalyzeError(null)
-    setAnalyzeData(null)
+    if (!customQ) {
+      setAnalyzeData(null)
+    }
     try {
       const res = await fetch(API.zoneAnalyze(zoneId), {
         method: 'POST',
@@ -355,23 +491,13 @@ export default function App() {
         message?: string
       }
       if (!res.ok) {
-        setAnalyzeError(data.message ?? data.error ?? `HTTP ${res.status}`)
+        setAnalyzeError(formatAnalyzeError(data.message ?? data.error ?? `HTTP ${res.status}`))
         setAnalyzeData(null)
         return
       }
-      setAnalyzeData(data)
-      const rag = data.rag
-      setRagError(null)
-      if (rag.error) {
-        setRagData(null)
-        setRagError(rag.message ?? String(rag.error))
-      } else {
-        setRagData({
-          query: rag.query,
-          answer: rag.answer,
-          sources: rag.sources,
-          model: rag.model,
-        })
+      applyAnalyzeResponse(data)
+      if (!customQ) {
+        setAnalyzeCache((previous) => ({ ...previous, [zoneId]: data }))
       }
     } catch {
       setAnalyzeError('Analyze failed (network).')
@@ -379,7 +505,7 @@ export default function App() {
     } finally {
       setAnalyzeLoading(false)
     }
-  }, [])
+  }, [analyzeCache, applyAnalyzeResponse])
 
   useEffect(() => {
     if (!selected?.id) {
@@ -517,7 +643,87 @@ export default function App() {
               <AlertCircle size={16} /> {geoError}
             </div>
           )}
+          <div className="map-toolbar">
+            <div className="map-toolbar__search">
+              <input
+                type="search"
+                value={zoneSearch}
+                onChange={(e) => setZoneSearch(e.target.value)}
+                placeholder="Find zone code, bylaw, or municipality"
+              />
+            </div>
+            <label className="map-toolbar__filter">
+              <span>Municipality</span>
+              <select
+                value={municipalityFilter}
+                onChange={(e) =>
+                  setMunicipalityFilter(e.target.value as 'all' | 'waterloo' | 'kitchener')
+                }
+              >
+                <option value="all">All</option>
+                <option value="waterloo">Waterloo</option>
+                <option value="kitchener">Kitchener</option>
+              </select>
+            </label>
+            {(hasActiveMapFilter || selected) && (
+              <button
+                type="button"
+                className="btn btn--ghost"
+                onClick={() => {
+                  setZoneSearch('')
+                  setMunicipalityFilter('all')
+                  setMatches([])
+                  setMatchPick(0)
+                  setClickLabel(null)
+                }}
+              >
+                Clear focus
+              </button>
+            )}
+          </div>
           <div className="map-wrap">
+            <div className="map-float map-float--legend">
+              <div className="map-float__title">Map legend</div>
+              <div className="legend-row">
+                <span className="legend-swatch legend-swatch--waterloo" />
+                Waterloo polygons
+              </div>
+              <div className="legend-row">
+                <span className="legend-swatch legend-swatch--kitchener" />
+                Kitchener polygons
+              </div>
+              <div className="legend-row">
+                <span className="legend-swatch legend-swatch--selected" />
+                Selected zone
+              </div>
+            </div>
+
+            {(hasActiveMapFilter || zoneSearchResults.length > 0) && (
+              <div className="map-float map-float--results">
+                <div className="map-float__title">Matching zones</div>
+                <p className="muted small">
+                  {matchedFeatureCount} match{matchedFeatureCount === 1 ? '' : 'es'} in the current map.
+                </p>
+                {zoneSearchResults.length > 0 ? (
+                  <div className="search-list">
+                    {zoneSearchResults.map((result) => (
+                      <button
+                        key={result.id}
+                        type="button"
+                        className={`search-list__item ${selected?.id === result.id ? 'search-list__item--active' : ''}`}
+                        onClick={() => void loadZoneById(result.id)}
+                      >
+                        <strong>{result.zoneCode}</strong>
+                        <span>{titleCaseMunicipality(result.municipality)}</span>
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="muted small">No zones match the current search.</p>
+                )}
+              </div>
+            )}
+
             <MapContainer
               center={WK_CENTER}
               zoom={11}
@@ -537,19 +743,62 @@ export default function App() {
               {geojson && geojson.features.length > 0 && (
                 <GeoJSON
                   data={geojson}
-                  style={geoJsonStyle}
-                  onEachFeature={(_f, layer) => {
+                  style={(feature) => {
+                    const props = getFeatureProps(feature)
+                    const featureId = typeof props.id === 'number' ? props.id : null
+                    const matched = featureMatches(feature)
+                    const base = geoJsonStyle(feature)
+                    const isSelected = featureId != null && selected?.id === featureId
+                    const isHovered = featureId != null && hoveredZoneId === featureId
+
+                    return {
+                      ...base,
+                      color: isSelected ? '#f8fafc' : isHovered ? '#fcd34d' : base.color,
+                      weight: isSelected ? 2.8 : isHovered ? 2.2 : base.weight,
+                      fillOpacity: isSelected
+                        ? 0.38
+                        : matched
+                          ? base.fillOpacity
+                          : hasActiveMapFilter
+                            ? 0.03
+                            : base.fillOpacity,
+                      opacity: matched || !hasActiveMapFilter ? 1 : 0.3,
+                    }
+                  }}
+                  onEachFeature={(feature, layer) => {
+                    const props = getFeatureProps(feature)
+                    const featureId = typeof props.id === 'number' ? props.id : null
+                    layer.bindTooltip(featureLabel(feature), {
+                      sticky: true,
+                      direction: 'top',
+                    })
+                    layer.on('mouseover', () => {
+                      if (featureId != null) setHoveredZoneId(featureId)
+                    })
+                    layer.on('mouseout', () => {
+                      if (featureId != null) {
+                        setHoveredZoneId((current) => (current === featureId ? null : current))
+                      }
+                    })
                     layer.on('click', (e: L.LeafletMouseEvent) => {
                       void runAtPoint(e.latlng.lat, e.latlng.lng)
                     })
                   }}
                 />
               )}
-              <FitBounds bounds={geoBounds} />
+              <FitBounds bounds={selectedBounds ?? geoBounds} />
             </MapContainer>
             {geoLoading && (
               <div className="map-overlay">
                 <Loader2 className="spin" size={28} />
+              </div>
+            )}
+            {!geoLoading && geojson && geojson.features.length === 0 && (
+              <div className="map-overlay map-overlay--empty">
+                <div className="empty-card">
+                  <strong>No zoning polygons loaded</strong>
+                  <p>Run ingestion for Waterloo and Kitchener, then reload the map.</p>
+                </div>
               </div>
             )}
           </div>
@@ -686,9 +935,33 @@ export default function App() {
                   <Sparkles size={17} strokeWidth={2} /> AI insights
                 </h3>
                 <p className="muted small zone-lede">
-                  We run <code className="inline-code">POST …/analyze</code> when you pick a zone:
-                  ingest any PDF URLs stored in open data, then ask the model using retrieved text only.
+                  The first time you select a zone, the app runs <code className="inline-code">POST
+                  …/analyze</code>: ingest any PDF URLs stored in open data, then answer using
+                  retrieved text only.
                 </p>
+                <div className="action-row">
+                  <button
+                    type="button"
+                    className="btn btn--primary"
+                    disabled={analyzeLoading}
+                    onClick={() => void runAnalyze(selected.id, undefined, true)}
+                  >
+                    {analyzeLoading ? (
+                      <Loader2 size={16} className="spin" />
+                    ) : (
+                      <RefreshCw size={16} />
+                    )}
+                    Refresh AI analysis
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn--ghost"
+                    onClick={() => setShowApiPanel(true)}
+                  >
+                    <Braces size={16} />
+                    Inspect API data
+                  </button>
+                </div>
                 {analyzeLoading && (
                   <div className="callout callout--wait">
                     <Loader2 size={18} className="spin" />
@@ -912,18 +1185,30 @@ export default function App() {
             <code>POST {API.documentsUpload}</code> — optional; adds a dedicated{' '}
             <code>document_id</code> filter for RAG when you want to search one uploaded document.
           </p>
-          <input
-            type="file"
-            accept="application/pdf,.pdf"
-            disabled={uploadBusy}
-            onChange={(e) => void onUpload(e.target.files)}
-          />
+          <label className="upload-dropzone">
+            <input
+              type="file"
+              accept="application/pdf,.pdf"
+              disabled={uploadBusy}
+              onChange={(e) => void onUpload(e.target.files)}
+            />
+            <span className="upload-dropzone__title">
+              {uploadBusy ? 'Uploading and indexing PDF…' : 'Choose a PDF to index'}
+            </span>
+            <span className="upload-dropzone__meta">
+              Use this when the zone record has no linked bylaw PDF or you want to search one document directly.
+            </span>
+          </label>
           {uploadError && <p className="err">{uploadError}</p>}
           {uploadResult && (
-            <p className="ok small">
-              {uploadResult.original_filename}: {uploadResult.chunks_indexed} chunks ·{' '}
-              <code>{uploadResult.document_id}</code>
-            </p>
+            <div className="callout callout--success">
+              <p>
+                <strong>{uploadResult.original_filename}</strong> indexed successfully.
+              </p>
+              <p className="small">
+                {uploadResult.chunks_indexed} chunks · <code>{uploadResult.document_id}</code>
+              </p>
+            </div>
           )}
         </aside>
       </div>
