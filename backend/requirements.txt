@@ -14,6 +14,8 @@ qdrant-client>=1.16,<2
 groq>=0.11,<1
 pypdf>=5.0,<7
 sentence-transformers>=3.0,<6
+pymupdf>=1.24,<2
+qdrant-client>=1.9,<2
 
 # Dev
 pytest>=8.0,<9
