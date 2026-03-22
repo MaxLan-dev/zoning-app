@@ -1,24 +1,47 @@
+@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500&display=swap');
+
 :root {
-  font-family: system-ui, 'Segoe UI', Roboto, sans-serif;
+  font-family: 'Manrope', 'Segoe UI', sans-serif;
   line-height: 1.5;
-  color: #1a1a1a;
-  background: #fff;
+  color: #14213d;
+  background:
+    radial-gradient(circle at top left, rgba(214, 228, 247, 0.72), transparent 32%),
+    radial-gradient(circle at top right, rgba(227, 240, 237, 0.82), transparent 28%),
+    linear-gradient(180deg, #f4f8fc 0%, #edf3f8 100%);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  color-scheme: light;
+  --ink-900: #14213d;
+  --ink-800: #223556;
+  --ink-700: #304564;
+  --ink-600: #50647f;
+  --ink-500: #6d7f96;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    color: #e8e8e8;
-    background: #121214;
-  }
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  min-height: 100vh;
 }
 
 body {
   margin: 0;
+  min-width: 320px;
 }
 
-#root {
-  min-height: 100vh;
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+a {
+  color: inherit;
 }
