@@ -19,12 +19,23 @@ def run_rag(
     *,
     limit: int = 8,
     document_id: str | None = None,
+    municipality: str | None = None,
+    zone_code: str | None = None,
+    source_object_id: str | None = None,
 ) -> dict[str, Any]:
     api_key = app.config.get("GROQ_API_KEY")
     if not api_key:
         raise ValueError("GROQ_API_KEY is not configured")
 
-    hits = semantic_search(app, question, limit=limit, document_id=document_id)
+    hits = semantic_search(
+        app,
+        question,
+        limit=limit,
+        document_id=document_id,
+        municipality=municipality,
+        zone_code=zone_code,
+        source_object_id=source_object_id,
+    )
     if not hits:
         return {
             "answer": "No matching passages were found in the vector index for this query.",
@@ -46,6 +57,7 @@ def run_rag(
                 "page": payload.get("page"),
                 "document_id": payload.get("document_id"),
                 "chunk_index": payload.get("chunk_index"),
+                "source_url": payload.get("source_url"),
             }
         )
 

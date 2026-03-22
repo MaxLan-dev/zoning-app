@@ -33,9 +33,35 @@ def rag():
             return jsonify({"error": "invalid_document_id"}), 400
         document_id = document_id.strip() or None
 
+    municipality = body.get("municipality")
+    if municipality is not None:
+        if not isinstance(municipality, str):
+            return jsonify({"error": "invalid_municipality"}), 400
+        municipality = municipality.strip().lower() or None
+
+    zone_code = body.get("zone_code")
+    if zone_code is not None:
+        if not isinstance(zone_code, str):
+            return jsonify({"error": "invalid_zone_code"}), 400
+        zone_code = zone_code.strip() or None
+
+    source_object_id = body.get("source_object_id")
+    if source_object_id is not None:
+        if not isinstance(source_object_id, str):
+            return jsonify({"error": "invalid_source_object_id"}), 400
+        source_object_id = source_object_id.strip() or None
+
     try:
         app = current_app._get_current_object()
-        result = run_rag(app, q.strip(), limit=limit, document_id=document_id)
+        result = run_rag(
+            app,
+            q.strip(),
+            limit=limit,
+            document_id=document_id,
+            municipality=municipality,
+            zone_code=zone_code,
+            source_object_id=source_object_id,
+        )
     except ValueError as exc:
         return jsonify({"error": "configuration_error", "message": str(exc)}), 503
     except Exception as exc:

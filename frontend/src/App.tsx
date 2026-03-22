@@ -1,7 +1,16 @@
-import { useEffect, useState } from 'react'
+import L from 'leaflet'
+import { useEffect, useRef, useState } from 'react'
+import 'leaflet/dist/leaflet.css'
 import './App.css'
 
-type Health = { status: string; service: string }
+/** Map pan limit: City of Kitchener + City of Waterloo area (WGS84). */
+const WK_MAX_BOUNDS = L.latLngBounds([43.37, -80.65], [43.58, -80.32])
+const WK_CENTER: L.LatLngTuple = [43.475, -80.485]
+const WK_INITIAL_ZOOM = 11
+
+const GEOJSON_URL = '/api/v1/zones/geojson?region=waterloo-kitchener'
+const AT_POINT_URL = (lat: number, lng: number) =>
+  `/api/v1/zones/at-point?lat=${lat}&lng=${lng}&region=waterloo-kitchener`
 
 type UploadResult = {
   document_id: string
@@ -12,13 +21,39 @@ type UploadResult = {
   collection: string
 }
 
+type ZonePick = {
+  id: number
+  municipality: string
+  zoneCode: string
+  sourceObjectId: string
+  sourceDocuments: string[]
+}
+
+function zoneStyle(feature?: GeoJSON.Feature): L.PathOptions {
+  const m = (feature?.properties as { municipality?: string } | undefined)?.municipality
+  const kitchener = m === 'kitchener'
+  return {
+    color: kitchener ? '#b8442a' : '#1a5fb4',
+    weight: 1,
+    fillOpacity: 0.14,
+  }
+}
+
 function App() {
-  const [health, setHealth] = useState<Health | null>(null)
+  const mapEl = useRef<HTMLDivElement>(null)
+  const mapRef = useRef<L.Map | null>(null)
+  const geoLayerRef = useRef<L.GeoJSON | null>(null)
+
   const [error, setError] = useState<string | null>(null)
   const [uploadStatus, setUploadStatus] = useState<string | null>(null)
   const [uploadResult, setUploadResult] = useState<UploadResult | null>(null)
   const [ragQuery, setRagQuery] = useState('')
   const [ragOut, setRagOut] = useState<string | null>(null)
+
+  const [mapReady, setMapReady] = useState(false)
+  const [mapStatus, setMapStatus] = useState<string | null>(null)
+  const [zonePick, setZonePick] = useState<ZonePick | null>(null)
+  const [ingestStatus, setIngestStatus] = useState<string | null>(null)
 
   useEffect(() => {
     fetch('/api/v1/health')
@@ -26,17 +61,103 @@ function App() {
         if (!r.ok) throw new Error(`HTTP ${r.status}`)
         return r.json()
       })
-      .then((data: Health) => {
-        setHealth(data)
-        setError(null)
-      })
+      .then(() => setError(null))
       .catch(() => {
-        setHealth(null)
         setError(
           'API unreachable. Start the Flask backend (port 5000) and use the Vite dev server so /api proxies correctly.',
         )
       })
   }, [])
+
+  useEffect(() => {
+    if (!mapEl.current || mapRef.current) return
+    const map = L.map(mapEl.current, {
+      maxBounds: WK_MAX_BOUNDS,
+      maxBoundsViscosity: 0.85,
+      minZoom: 10,
+      maxZoom: 18,
+    }).setView(WK_CENTER, WK_INITIAL_ZOOM)
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '&copy; OpenStreetMap contributors',
+    }).addTo(map)
+    mapRef.current = map
+    setMapReady(true)
+    return () => {
+      map.remove()
+      mapRef.current = null
+      setMapReady(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!mapReady) return
+    void loadWaterlooKitchenerZones()
+  }, [mapReady])
+
+  async function loadWaterlooKitchenerZones() {
+    setMapStatus('Loading Waterloo + Kitchener zones…')
+    setZonePick(null)
+    const res = await fetch(GEOJSON_URL)
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) {
+      setMapStatus(
+        typeof data.message === 'string' ? data.message : `HTTP ${res.status}`,
+      )
+      return
+    }
+    const map = mapRef.current
+    if (!map) {
+      setMapStatus('Map not ready.')
+      return
+    }
+    if (geoLayerRef.current) {
+      map.removeLayer(geoLayerRef.current)
+      geoLayerRef.current = null
+    }
+    const fc = data as GeoJSON.FeatureCollection
+    const layer = L.geoJSON(fc, {
+      style: zoneStyle,
+      onEachFeature: (_feature, ly) => {
+        ly.on('click', (e: L.LeafletMouseEvent) => {
+          const { lat, lng } = e.latlng
+          void (async () => {
+            const r = await fetch(AT_POINT_URL(lat, lng))
+            const j = await r.json()
+            const first = j.matches?.[0]
+            if (first) {
+              setZonePick({
+                id: first.id as number,
+                municipality: first.municipality as string,
+                zoneCode: first.zoneCode as string,
+                sourceObjectId: first.sourceObjectId as string,
+                sourceDocuments: (first.sourceDocuments as string[]) || [],
+              })
+            } else {
+              setZonePick(null)
+            }
+          })()
+        })
+      },
+    })
+    layer.addTo(map)
+    geoLayerRef.current = layer
+    if (fc.features?.length) {
+      try {
+        map.fitBounds(layer.getBounds(), { padding: [20, 20], maxZoom: 14 })
+      } catch {
+        map.setView(WK_CENTER, WK_INITIAL_ZOOM)
+      }
+      setMapStatus(
+        `${fc.features.length} zones (Waterloo + Kitchener). Click a polygon.`,
+      )
+    } else {
+      map.setView(WK_CENTER, WK_INITIAL_ZOOM)
+      setMapStatus(
+        'No zone polygons in the database. Run ingest for waterloo and kitchener (POST /api/v1/jobs/ingest-zoning).',
+      )
+    }
+  }
 
   async function onUploadFile(fileList: FileList | null) {
     const file = fileList?.[0]
@@ -73,16 +194,20 @@ function App() {
     if (!ragQuery.trim()) return
     setRagOut('…')
     try {
+      const body: Record<string, unknown> = {
+        q: ragQuery.trim(),
+        limit: 8,
+      }
+      if (uploadResult?.document_id) body.document_id = uploadResult.document_id
+      if (zonePick) {
+        body.municipality = zonePick.municipality
+        body.zone_code = zonePick.zoneCode
+        body.source_object_id = zonePick.sourceObjectId
+      }
       const res = await fetch('/api/v1/rag', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          q: ragQuery.trim(),
-          limit: 8,
-          ...(uploadResult?.document_id
-            ? { document_id: uploadResult.document_id }
-            : {}),
-        }),
+        body: JSON.stringify(body),
       })
       const data = await res.json()
       setRagOut(JSON.stringify(data, null, 2))
@@ -91,35 +216,91 @@ function App() {
     }
   }
 
+  async function ingestZonePdfs() {
+    if (!zonePick) return
+    setIngestStatus('Ingesting…')
+    try {
+      const res = await fetch(
+        `/api/v1/zones/${zonePick.id}/ingest-documents`,
+        { method: 'POST' },
+      )
+      const data = await res.json().catch(() => ({}))
+      setIngestStatus(JSON.stringify(data, null, 2))
+    } catch {
+      setIngestStatus('request failed')
+    }
+  }
+
   return (
     <div className="app">
       <header className="header">
-        <h1>National Zoning &amp; Land Use Data Platform</h1>
+        <h1>Zoning · Waterloo &amp; Kitchener</h1>
         <p className="tagline">
-          Flask + React (TypeScript) · Qdrant · Beautiful Soup · LangChain / LangSmith
-          (optional)
+          Map locked to the two cities · click a zone · ingest PDFs · RAG (Groq)
         </p>
       </header>
 
+      {error && (
+        <section className="panel">
+          <p className="err">{error}</p>
+        </section>
+      )}
+
       <section className="panel">
-        <h2>API status</h2>
-        {health && (
-          <p className="ok">
-            <code>{health.service}</code>: {health.status}
-          </p>
+        <h2>Map</h2>
+        <p className="hint">
+          Data: <code>region=waterloo-kitchener</code> (City of Waterloo + City of
+          Kitchener records). Blue polygons ≈ Waterloo, red-orange ≈ Kitchener.
+          Official viewer reference:{' '}
+          <a
+            href="https://maps.waterloo.ca/html5viewer/?viewer=waterlooviewer&amp;layerTheme=Zoning"
+            target="_blank"
+            rel="noreferrer"
+          >
+            City of Waterloo zoning map
+          </a>
+          .
+        </p>
+        <div className="row">
+          <button type="button" onClick={() => void loadWaterlooKitchenerZones()}>
+            Reload zones
+          </button>
+        </div>
+        {mapStatus && <p className="muted">{mapStatus}</p>}
+        <div ref={mapEl} className="map-frame" />
+        {zonePick && (
+          <div className="zone-panel">
+            <p>
+              <strong>{zonePick.zoneCode}</strong>{' '}
+              <span className="muted">
+                ({zonePick.municipality}) · id {zonePick.id}
+              </span>
+            </p>
+            <p className="muted">
+              sourceObjectId: <code>{zonePick.sourceObjectId}</code>
+            </p>
+            {zonePick.sourceDocuments.length > 0 ? (
+              <ul className="upload-result">
+                {zonePick.sourceDocuments.map((u) => (
+                  <li key={u}>
+                    <code>{u}</code>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="muted">No sourceDocuments URLs on this record.</p>
+            )}
+            <button type="button" onClick={() => void ingestZonePdfs()}>
+              Ingest PDF URLs into Qdrant
+            </button>
+            {ingestStatus && <pre className="rag-out">{ingestStatus}</pre>}
+          </div>
         )}
-        {error && <p className="err">{error}</p>}
       </section>
 
       <section className="panel">
-        <h2>Vectorize PDF</h2>
-        <p className="hint">
-          Uploads to the API, chunks text per page, embeds locally with
-          sentence-transformers (no OpenAI key), and upserts into Qdrant with
-          metadata including <code>human_label</code> (e.g. filename, timestamp,
-          page x of y). Set <code>LANGSMITH_API_KEY</code> for LangChain/LangSmith
-          tooling env sync when you add those libraries.
-        </p>
+        <h2>Vectorize PDF (upload)</h2>
+        <p className="hint">Optional manual upload; map flow prefers URL ingest.</p>
         <input
           type="file"
           accept="application/pdf,.pdf"
@@ -136,9 +317,6 @@ function App() {
             <li>
               Document ID: <code>{uploadResult.document_id}</code>
             </li>
-            <li>
-              Collection: <code>{uploadResult.collection}</code>
-            </li>
           </ul>
         )}
       </section>
@@ -146,9 +324,8 @@ function App() {
       <section className="panel">
         <h2>RAG (Groq)</h2>
         <p className="hint">
-          Retrieves chunks from Qdrant then answers with Groq. Uses last
-          upload&apos;s <code>document_id</code> when set. Requires{' '}
-          <code>GROQ_API_KEY</code> and chunk <code>text</code> in Qdrant.
+          Uses the selected zone&apos;s municipality / zone code when a polygon is
+          selected.
         </p>
         <input
           type="text"
