@@ -150,47 +150,30 @@ def _extract_source_documents(properties: dict[str, Any]) -> list[str]:
     """Collect PDF/document URLs from feature properties (field names vary by municipality)."""
     documents: list[str] = []
     seen: set[str] = set()
-
-    def add(url: str) -> None:
-        u = url.strip()
-        if not u or u in seen:
-            return
-        seen.add(u)
-        documents.append(u)
-
     for key, value in properties.items():
         if not isinstance(value, str):
             continue
-        raw = value.strip()
-        if not raw:
+        cleaned_value = value.strip()
+        if not cleaned_value:
             continue
         normalized_key = key.lower()
-        if normalized_key.startswith("generaldocument") or normalized_key.endswith(
+        is_document_field = normalized_key.startswith("generaldocument") or normalized_key.endswith(
             "_document"
-        ):
-            add(raw)
-            continue
-        if normalized_key.endswith("_url") or normalized_key.endswith("_link"):
-            if raw.lower().startswith(("http://", "https://")):
-                add(raw)
-            continue
-        if any(
-            token in normalized_key
-            for token in ("pdf", "bylaw", "documenturl", "doc_url", "attachment")
-        ):
-            for m in _URL_IN_STRING.findall(raw):
-                add(m)
-            if raw.lower().startswith(("http://", "https://")):
-                add(raw)
-            continue
-        if raw.lower().startswith(("http://", "https://")):
-            if raw.lower().endswith(".pdf") or "pdf" in normalized_key:
-                add(raw)
-            for m in _URL_IN_STRING.findall(raw):
-                if m.lower().rstrip(").,]").endswith(".pdf"):
-                    add(m)
-
+        )
+        is_pdf_link_field = "pdf" in normalized_key and "url" in normalized_key
+        if is_document_field or is_pdf_link_field or _looks_like_pdf_url(cleaned_value):
+            if cleaned_value in seen:
+                continue
+            seen.add(cleaned_value)
+            documents.append(cleaned_value)
     return documents
+
+
+def _looks_like_pdf_url(value: str) -> bool:
+    normalized = value.lower()
+    if ".pdf" not in normalized:
+        return False
+    return normalized.startswith("http://") or normalized.startswith("https://")
 
 
 def _is_allowed_geometry_type(
