@@ -332,6 +332,93 @@
   border-radius: 10px;
 }
 
+.ops-card {
+  padding: 0.95rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.ops-card__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.ops-card__head .h2 {
+  margin-bottom: 0.2rem;
+}
+
+.ops-grid {
+  display: grid;
+  gap: 0.6rem;
+  margin-top: 0.8rem;
+}
+
+.ops-tile {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.18);
+  padding: 0.75rem;
+}
+
+.ops-tile__top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.ops-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.ops-flags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-top: 0.45rem;
+}
+
+.ops-selected {
+  margin-top: 0.8rem;
+  padding-top: 0.8rem;
+  border-top: 1px solid var(--border);
+}
+
+.runs-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  margin-top: 0.65rem;
+}
+
+.run-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.55rem 0;
+  border-bottom: 1px solid rgba(45, 56, 68, 0.65);
+}
+
+.run-row:last-child {
+  border-bottom: none;
+}
+
+.run-row__meta {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.25rem;
+}
+
 .steps {
   margin: 0.65rem 0 0;
   padding-left: 1.2rem;
@@ -403,6 +490,11 @@
 
 .btn--ghost:hover:not(:disabled) {
   border-color: var(--muted);
+}
+
+.btn--small {
+  padding: 0.3rem 0.55rem;
+  font-size: 0.76rem;
 }
 
 .btn--primary {
@@ -629,6 +721,11 @@
   font-size: 0.8rem;
 }
 
+.zone-details--ops {
+  padding: 0;
+  margin-top: 0.8rem;
+}
+
 .zone-details summary {
   cursor: pointer;
   color: var(--muted);
@@ -761,6 +858,16 @@
 .tag--skipped {
   background: rgba(248, 113, 113, 0.15);
   color: var(--err);
+}
+
+.tag--completed {
+  background: rgba(52, 211, 153, 0.2);
+  color: var(--ok);
+}
+
+.tag--running {
+  background: rgba(59, 130, 246, 0.15);
+  color: #93c5fd;
 }
 
 .rag-answer {
