@@ -17,8 +17,7 @@ function App() {
   const [error, setError] = useState<string | null>(null)
   const [uploadStatus, setUploadStatus] = useState<string | null>(null)
   const [uploadResult, setUploadResult] = useState<UploadResult | null>(null)
-  const [searchQ, setSearchQ] = useState('')
-  const [searchOut, setSearchOut] = useState<string | null>(null)
+  const [ragQuery, setRagQuery] = useState('')
   const [ragOut, setRagOut] = useState<string | null>(null)
 
   useEffect(() => {
@@ -70,37 +69,15 @@ function App() {
     }
   }
 
-  async function onSearch() {
-    if (!searchQ.trim()) return
-    setSearchOut('…')
-    try {
-      const res = await fetch('/api/v1/search', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          q: searchQ.trim(),
-          limit: 5,
-          ...(uploadResult?.document_id
-            ? { document_id: uploadResult.document_id }
-            : {}),
-        }),
-      })
-      const data = await res.json()
-      setSearchOut(JSON.stringify(data, null, 2))
-    } catch {
-      setSearchOut('request failed')
-    }
-  }
-
   async function onRag() {
-    if (!searchQ.trim()) return
+    if (!ragQuery.trim()) return
     setRagOut('…')
     try {
       const res = await fetch('/api/v1/rag', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          q: searchQ.trim(),
+          q: ragQuery.trim(),
           limit: 8,
           ...(uploadResult?.document_id
             ? { document_id: uploadResult.document_id }
@@ -167,31 +144,23 @@ function App() {
       </section>
 
       <section className="panel">
-        <h2>Search (test)</h2>
+        <h2>RAG (Groq)</h2>
         <p className="hint">
-          Semantic search over ingested chunks. Uses last upload&apos;s{' '}
-          <code>document_id</code> when set; re-ingest PDFs to store{' '}
-          <code>text</code> in Qdrant.
+          Retrieves chunks from Qdrant then answers with Groq. Uses last
+          upload&apos;s <code>document_id</code> when set. Requires{' '}
+          <code>GROQ_API_KEY</code> and chunk <code>text</code> in Qdrant.
         </p>
         <input
           type="text"
-          value={searchQ}
-          placeholder="Question or keywords"
-          onChange={(e) => setSearchQ(e.target.value)}
+          value={ragQuery}
+          placeholder="Question"
+          onChange={(e) => setRagQuery(e.target.value)}
           style={{ width: '100%', maxWidth: '28rem' }}
         />{' '}
-        <button type="button" onClick={() => void onSearch()}>
-          Search
-        </button>{' '}
         <button type="button" onClick={() => void onRag()}>
-          RAG (Groq)
+          Ask
         </button>
-        {searchOut && (
-          <pre className="search-out">{searchOut}</pre>
-        )}
-        {ragOut && (
-          <pre className="search-out">{ragOut}</pre>
-        )}
+        {ragOut && <pre className="rag-out">{ragOut}</pre>}
       </section>
     </div>
   )

@@ -12,7 +12,6 @@ def index():
             "endpoints": {
                 "health": "/api/v1/health",
                 "upload_pdf": "POST /api/v1/documents/upload",
-                "search": "POST /api/v1/search",
                 "rag": "POST /api/v1/rag",
             },
         }

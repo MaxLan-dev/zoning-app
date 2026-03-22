@@ -3,7 +3,7 @@ info:
   title: National Zoning & Land Use Data Platform API
   version: 0.1.0
   description: |
-    REST API for municipalities, documents, structured zoning data, search, and jobs.
+    REST API for municipalities, documents, structured zoning data, RAG, and jobs.
     Expand this spec as endpoints are implemented; optionally generate a TypeScript client for the frontend.
 servers:
   - url: http://localhost:5000

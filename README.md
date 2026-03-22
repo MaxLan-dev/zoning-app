@@ -2,7 +2,7 @@
 
 Full-stack platform for aggregating Canadian municipal zoning and land use data into a searchable, analyzable, open dataset.
 
-**Stack:** Flask (API + orchestration), React + TypeScript (UI), **LangChain** (RAG, extraction, agents), **LangSmith** (tracing, evaluation, prompts), **Qdrant** (vector database), **Beautiful Soup** (HTML scraping and parsing).
+**Stack:** Flask (API), React + TypeScript (UI), **Qdrant** (vectors), **Groq** (RAG answers), **Beautiful Soup** (HTML scraping). Optional **LangSmith** (tracing env for tooling you add); LangChain lives in `requirements-ai.txt` when you wire it.
 
 ---
 
@@ -22,7 +22,7 @@ Each municipality maintains its own zoning bylaws, official plans, and land use 
 | **Scale** | Roughly 4–5,000 municipalities in Canada; manual collection does not scale. |
 | **Currency** | Bylaws change often; one-time snapshots go stale without monitoring and updates. |
 
-This platform combines **intelligent ingestion** (scraping, PDF/OCR, normalization), **structured storage and APIs**, **quality assurance**, and **LLM workflows** (LangChain + LangSmith) with **Qdrant** for semantic search, so scattered documents become a **unified, queryable dataset** for evidence-based housing and land-use research.
+This platform combines **intelligent ingestion** (scraping, PDF/OCR, normalization), **structured storage and APIs**, **quality assurance**, and **LLM-assisted Qdrant RAG** (Groq + optional LangSmith/LangChain later), so scattered documents become a **unified, queryable dataset** for evidence-based housing and land-use research.
 
 ---
 
@@ -46,33 +46,20 @@ This platform combines **intelligent ingestion** (scraping, PDF/OCR, normalizati
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                     React + TypeScript (frontend)                │
-│  Search · Maps · Dashboards · Compare · Admin review UI         │
+│  RAG · Maps · Dashboards · Compare · Admin review UI            │
 └────────────────────────────┬────────────────────────────────────┘
                              │ HTTPS (JSON)
 ┌────────────────────────────▼────────────────────────────────────┐
 │                        Flask backend                               │
-│  REST API · Auth (optional) · Job triggers · File uploads         │
-│  Orchestrates: DB, object storage, workers                         │
-└─────┬───────────────────┬───────────────────┬───────────────────┘
-      │                   │                   │
-      ▼                   ▼                   ▼
-┌───────────┐     ┌───────────────┐     ┌───────────────────────────┐
-│ PostgreSQL│     │ Object store  │     │ Worker queue (Celery/RQ)   │
-│ + PostGIS │     │ (S3/MinIO)    │     │ Scraping · OCR · ETL ·     │
-│ (optional)│     │ PDFs, HTML    │     │ chunk/embed → Qdrant       │
-└───────────┘     └───────────────┘     └───────────┬───────────────┘
-                                                   │
-                   ┌───────────────────────────────▼────────────────┐
-                   │ LangChain (Python)                              │
-                   │ RAG from Qdrant · tools (SQL/API) · extraction  │
-                   └───────────────────────────────┬────────────────┘
-                                                   │
-     ┌─────────────────────────────────────────────┼─────────────────────────┐
-     ▼                                             ▼                         ▼
-┌─────────────┐                           ┌─────────────────┐     ┌─────────────────┐
-│ Qdrant      │                           │ LangSmith        │     │ Beautiful Soup   │
-│ Vector DB   │  ← embeddings + metadata  │ Tracing · evals  │     │ + requests/httpx │
-└─────────────┘                           └─────────────────┘     └─────────────────┘
+│  REST API · uploads · scrape · RAG (Qdrant + Groq)                 │
+└─────┬───────────────────────────────┬───────────────────────────────┘
+      │                               │
+      ▼                               ▼
+┌───────────┐                 ┌───────────────────────────────────────┐
+│ PostgreSQL│                 │ Qdrant (vectors) · Groq (answers)      │
+│ + PostGIS │                 │ Beautiful Soup + httpx · PDF/OCR       │
+│ (optional)│                 │ Optional LangSmith when wired          │
+└───────────┘                 └───────────────────────────────────────┘
 ```
 
 ---
@@ -82,7 +69,7 @@ This platform combines **intelligent ingestion** (scraping, PDF/OCR, normalizati
 - **LangChain:** extraction chains/agents over PDF and HTML text (with citations); **RAG** over Qdrant; optional agents that combine semantic retrieval with structured queries; Pydantic (or similar) outputs aligned to your zoning schema.
 - **LangSmith:** trace runs for debugging; evaluation datasets for extraction quality; prompt versioning; feedback loops from human review.
 
-Flask remains the **system of record** for APIs, auth, and batch jobs; React delivers **search, maps, and review** workflows.
+Flask remains the **system of record** for APIs, auth, and batch jobs; React delivers **RAG, maps, and review** workflows.
 
 ---
 
@@ -124,7 +111,7 @@ Flask remains the **system of record** for APIs, auth, and batch jobs; React del
 zoning-app/
 ├── README.md
 ├── LICENSE
-├── docker-compose.yml          # API + db + redis + minio + qdrant (optional)
+├── docker-compose.yml          # Postgres + Qdrant (optional local stack)
 ├── .env.example
 │
 ├── backend/                    # Flask
@@ -132,7 +119,7 @@ zoning-app/
 │   │   ├── __init__.py
 │   │   ├── config.py
 │   │   ├── extensions.py
-│   │   ├── api/                # municipalities, zones, search, jobs, nl query
+│   │   ├── api/                # health, documents, rag, scrape, …
 │   │   ├── models/
 │   │   ├── schemas/
 │   │   ├── services/
@@ -190,7 +177,7 @@ Use **PostGIS** when you store or query geometries.
 |------|----------|
 | Catalog | `GET /api/v1/municipalities`, `GET /api/v1/municipalities/{id}/documents` |
 | Structured | `GET /api/v1/zones` with filters |
-| Search | `GET /api/v1/search?q=...` |
+| RAG | `POST /api/v1/rag` — retrieve context from Qdrant + Groq |
 | AI / NL | `POST /api/v1/query` — natural language; LangChain + Qdrant + citations |
 | Jobs | `POST /api/v1/jobs/ingest`, `GET /api/v1/jobs/{id}` |
 | Admin | Review, re-run extraction, export |
@@ -213,14 +200,13 @@ Use **PostGIS** when you store or query geometries.
 
 | Variable | Purpose |
 |----------|---------|
-| `DATABASE_URL` | PostgreSQL |
-| `REDIS_URL` | Queue / cache |
-| `S3_*` / `MINIO_*` | Object storage for PDFs |
+| `DATABASE_URL` | PostgreSQL (optional; else SQLite) |
 | `QDRANT_URL`, `QDRANT_API_KEY`, `QDRANT_COLLECTION` | Vector DB |
-| LLM provider keys | e.g. OpenAI or other |
-| `LANGCHAIN_TRACING_V2`, `LANGCHAIN_API_KEY`, `LANGCHAIN_PROJECT` | LangSmith tracing |
-| `LANGSMITH_API_KEY` | Evals / Hub (per current LangChain docs) |
-| `FLASK_ENV`, `SECRET_KEY`, CORS origins | Flask |
+| `GROQ_API_KEY`, `GROQ_MODEL` | RAG answers |
+| `EMBEDDING_MODEL`, `MAX_UPLOAD_MB` | Local embeddings + upload size |
+| `PDF_OCR_*` | PDF extraction / Tesseract (see `pdf/extract.py`) |
+| `LANGSMITH_API_KEY` | Optional; sets LangChain-compatible tracing env |
+| `FLASK_ENV`, `SECRET_KEY`, `CORS_ORIGINS` | Flask |
 
 ---
 
@@ -235,11 +221,11 @@ Respect **robots.txt**, **terms of use**, and **rate limits**. Prefer **open dat
 | Layer | Choice |
 |-------|--------|
 | API | Flask, SQLAlchemy, Alembic, Flask-CORS |
-| Jobs | Celery or RQ + Redis |
+| Jobs | In-process today; add Celery/RQ + Redis when needed |
 | DB | PostgreSQL (+ PostGIS, optional) |
 | Vector DB | **Qdrant** |
 | HTML scraping | **Beautiful Soup** + **requests** / **httpx** |
-| AI | LangChain; embeddings via chosen provider |
+| AI | Local embeddings (sentence-transformers); Groq for RAG; LangChain optional |
 | LLM ops | LangSmith |
 | UI | React 18+, TypeScript, Vite |
 | Maps | MapLibre / Leaflet (when geo is ready) |
@@ -252,7 +238,7 @@ Respect **robots.txt**, **terms of use**, and **rate limits**. Prefer **open dat
 
 1. **Clone** the repo and copy `.env.example` to `.env` at the repo root (optional; defaults work for a quick start).
 
-2. **Infrastructure (optional):** from the repo root, run `docker compose up -d` for Postgres, Redis, Qdrant, and MinIO. If you skip Docker, the API defaults to **SQLite** (`backend/zoning_dev.db`) until you set `DATABASE_URL`.
+2. **Infrastructure (optional):** from the repo root, run `docker compose up -d` for Postgres and Qdrant. If you skip Docker, the API defaults to **SQLite** (`backend/zoning_dev.db`) until you set `DATABASE_URL`.
 
 3. **Backend** — dependencies live in **`backend/requirements.txt`** (there is no `requirements.txt` at the repo root). Install into a **virtualenv** so packages and the Flask CLI stay together.
 
@@ -298,7 +284,7 @@ Respect **robots.txt**, **terms of use**, and **rate limits**. Prefer **open dat
 ## Roadmap (suggested)
 
 1. **Skeleton** — Flask API, React shell, sample data, one LangChain RAG path with LangSmith tracing.  
-2. **Ingestion** — Beautiful Soup scraper template, PDF path, DB schema, basic search API.  
+2. **Ingestion** — Beautiful Soup scraper template, PDF path, DB schema, document upload + RAG API.  
 3. **AI extraction** — LangChain extraction + review queue + LangSmith evals.  
 4. **Scale** — more municipalities, job scaling, change detection.  
 5. **Open data** — documented export, license, public API policy.

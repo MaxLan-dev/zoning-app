@@ -1,1 +1,1 @@
-# Celery / RQ tasks (scraping, ETL, embedding jobs)
+# Background tasks (placeholder — add Celery/RQ + Redis when you wire async jobs)

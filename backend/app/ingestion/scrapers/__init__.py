@@ -6,14 +6,7 @@ from .fetch import (
     fetch_url,
     process_pdf_bytes,
 )
-
-__all__ = [
-    "FetchedDocument",
-    "PdfIngestResult",
-    "fetch_and_extract_pdf",
-    "fetch_url",
-    "process_pdf_bytes",
-from app.ingestion.scrapers.municipal import (
+from .municipal import (
     GeoJSONResult,
     MunicipalWebScraper,
     ScrapedLink,
@@ -23,6 +16,11 @@ from app.ingestion.scrapers.municipal import (
 )
 
 __all__ = [
+    "FetchedDocument",
+    "PdfIngestResult",
+    "fetch_and_extract_pdf",
+    "fetch_url",
+    "process_pdf_bytes",
     "GeoJSONResult",
     "MunicipalWebScraper",
     "ScrapedLink",
