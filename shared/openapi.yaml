@@ -32,6 +32,10 @@ paths:
     get:
       summary: Zoning polygons — use region=waterloo-kitchener or municipality / municipalities
       operationId: getZonesGeojson
+  /api/v1/zones/region-summary:
+    get:
+      summary: Zone counts per municipality (same scope as geojson)
+      operationId: getZonesRegionSummary
   /api/v1/zones/at-point:
     get:
       summary: Zones at lat/lng — defaults to waterloo+kitchener if municipality omitted

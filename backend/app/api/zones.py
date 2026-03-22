@@ -132,6 +132,36 @@ def zones_geojson():
     return jsonify({"type": "FeatureCollection", "features": features})
 
 
+@bp.get("/region-summary")
+def zones_region_summary():
+    """Zone counts per municipality for the same scope as ``/geojson`` (dashboard / UI)."""
+    slugs = _slugs_for_geojson()
+    if not slugs:
+        return jsonify(
+            {
+                "error": "missing_scope",
+                "message": (
+                    "Provide `municipality`, `municipalities`, or `region=waterloo-kitchener`."
+                ),
+            }
+        ), 400
+    count_by_municipality = {
+        slug: ZoningRecord.query.filter_by(municipality=slug).count() for slug in slugs
+    }
+    total_zones = sum(count_by_municipality.values())
+    region_key = (request.args.get("region") or "").strip() or (
+        "multi" if len(slugs) > 1 else slugs[0]
+    )
+    return jsonify(
+        {
+            "region": region_key,
+            "municipalities": slugs,
+            "totalZones": total_zones,
+            "countByMunicipality": count_by_municipality,
+        }
+    )
+
+
 @bp.get("/at-point")
 def zone_at_point():
     lat = request.args.get("lat", type=float)

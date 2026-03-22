@@ -100,3 +100,20 @@ def test_at_point_defaults_to_waterloo_kitchener_slugs(client, app):
 def test_documents_ingest_url_validation(client):
     res = client.post("/api/v1/documents/ingest-url", json={})
     assert res.status_code == 400
+
+
+def test_region_summary_requires_scope(client):
+    res = client.get("/api/v1/zones/region-summary")
+    assert res.status_code == 400
+
+
+def test_region_summary_counts(client, app):
+    with app.app_context():
+        _add_zone_square(municipality="waterloo", zone_code="W1", source_object_id="w1")
+        _add_zone_square(municipality="kitchener", zone_code="K1", source_object_id="k1")
+    res = client.get("/api/v1/zones/region-summary?region=waterloo-kitchener")
+    assert res.status_code == 200
+    data = res.get_json()
+    assert data["totalZones"] == 2
+    assert data["countByMunicipality"]["waterloo"] == 1
+    assert data["countByMunicipality"]["kitchener"] == 1
