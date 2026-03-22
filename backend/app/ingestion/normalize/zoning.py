@@ -142,17 +142,31 @@ def _parse_effective_date(value: str | None) -> str | None:
 
 def _extract_source_documents(properties: dict[str, Any]) -> list[str]:
     documents: list[str] = []
+    seen: set[str] = set()
     for key, value in properties.items():
         if not isinstance(value, str):
             continue
-        if not value.strip():
+        cleaned_value = value.strip()
+        if not cleaned_value:
             continue
         normalized_key = key.lower()
-        if normalized_key.startswith("generaldocument") or normalized_key.endswith(
+        is_document_field = normalized_key.startswith("generaldocument") or normalized_key.endswith(
             "_document"
-        ):
-            documents.append(value.strip())
+        )
+        is_pdf_link_field = "pdf" in normalized_key and "url" in normalized_key
+        if is_document_field or is_pdf_link_field or _looks_like_pdf_url(cleaned_value):
+            if cleaned_value in seen:
+                continue
+            seen.add(cleaned_value)
+            documents.append(cleaned_value)
     return documents
+
+
+def _looks_like_pdf_url(value: str) -> bool:
+    normalized = value.lower()
+    if ".pdf" not in normalized:
+        return False
+    return normalized.startswith("http://") or normalized.startswith("https://")
 
 
 def _is_allowed_geometry_type(
