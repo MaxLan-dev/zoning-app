@@ -143,3 +143,73 @@ def test_scrape_geojson_invalid_page_size(client):
     )
     assert res.status_code == 400
     assert "pageSize" in res.get_json()["error"]
+
+
+def test_scrape_templates_lists_municipalities(client):
+    res = client.get("/api/v1/scrape/templates")
+    assert res.status_code == 200
+    data = res.get_json()
+    slugs = {item["slug"] for item in data["municipalities"]}
+    assert "kitchener" in slugs
+    assert "waterloo" in slugs
+
+
+def test_scrape_geojson_normalized(client, monkeypatch):
+    def fake_scrape_geojson(
+        *,
+        source_url,
+        geojson_url,
+        allowed_domains,
+        paginate,
+        page_size,
+        max_pages,
+    ):
+        assert "utility.arcgis.com" in allowed_domains
+        assert paginate is True
+        assert page_size == 1000
+        assert max_pages == 5
+        return GeoJSONResult(
+            source_url=source_url,
+            geojson_url=geojson_url,
+            feature_collection={
+                "type": "FeatureCollection",
+                "features": [
+                    {
+                        "type": "Feature",
+                        "properties": {
+                            "OBJECTID": 1,
+                            "ZONE_CLASS": "RES-2",
+                            "ZONE_TYPE": "RES",
+                            "BYLAW_NO": "2019-051",
+                        },
+                        "geometry": {"type": "Polygon", "coordinates": []},
+                    }
+                ],
+            },
+        )
+
+    monkeypatch.setattr("app.api.scrape.scrape_geojson_data", fake_scrape_geojson)
+
+    res = client.post(
+        "/api/v1/scrape/geojson/normalized",
+        json={
+            "municipality": "kitchener",
+            "pageSize": 1000,
+            "maxPages": 5,
+            "maxRecords": 5,
+        },
+    )
+    assert res.status_code == 200
+    data = res.get_json()
+    assert data["municipality"] == "kitchener"
+    assert data["normalizedCount"] == 1
+    assert data["records"][0]["zoneCode"] == "RES-2"
+
+
+def test_scrape_geojson_normalized_requires_geojson_when_template_has_none(client):
+    res = client.post(
+        "/api/v1/scrape/geojson/normalized",
+        json={"municipality": "waterloo"},
+    )
+    assert res.status_code == 400
+    assert "default GeoJSON URL" in res.get_json()["error"]
