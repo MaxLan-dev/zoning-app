@@ -184,6 +184,24 @@ Use **PostGIS** when you store or query geometries.
 
 ---
 
+## API surface (implemented now)
+
+| Area | Endpoints |
+|------|-----------|
+| Health | `GET /api/v1/health` |
+| Scrape | `POST /api/v1/scrape/links`, `POST /api/v1/scrape/geojson` |
+| Templates | `GET /api/v1/scrape/templates` |
+| Normalize | `POST /api/v1/scrape/geojson/normalized` |
+| Ingestion jobs | `POST /api/v1/jobs/ingest-zoning` |
+| Zones query | `GET /api/v1/zones` |
+
+**Waterloo template defaults:**
+- Source metadata URL: `https://gis.waterloo.ca/maps/rest/services/Public/Public_Operations/MapServer?f=json`
+- Default zoning GeoJSON URL: `https://gis.waterloo.ca/maps/rest/services/Public/Public_Operations/MapServer/48/query?where=1%3D1&outFields=*&f=geojson&outSR=4326`
+- Validation rules: requires source object id and polygon/multipolygon geometry
+
+---
+
 ## Ingestion and automation
 
 1. Discover (sitemaps, curated seeds per template)  
@@ -278,6 +296,19 @@ Respect **robots.txt**, **terms of use**, and **rate limits**. Prefer **open dat
    ```
 
 5. **LangSmith:** set the variables in `.env.example` under LangSmith / LangChain, install `requirements-ai.txt`, then run a chain and confirm traces in the LangSmith UI.
+
+6. **Quick Waterloo API verification**
+   ```bash
+   curl -X POST http://127.0.0.1:5000/api/v1/scrape/geojson/normalized \
+     -H "Content-Type: application/json" \
+     -d '{"municipality":"waterloo","maxRecords":3}'
+
+   curl -X POST http://127.0.0.1:5000/api/v1/jobs/ingest-zoning \
+     -H "Content-Type: application/json" \
+     -d '{"municipality":"waterloo"}'
+
+   curl "http://127.0.0.1:5000/api/v1/zones?municipality=waterloo&limit=5"
+   ```
 
 ---
 

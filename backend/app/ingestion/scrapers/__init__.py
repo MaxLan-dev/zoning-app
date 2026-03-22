@@ -14,6 +14,11 @@ from .municipal import (
     scrape_geojson_data,
     scrape_municipal_page,
 )
+from app.ingestion.scrapers.templates import (
+    MunicipalityTemplate,
+    get_municipality_template,
+    list_municipality_templates,
+)
 
 __all__ = [
     "FetchedDocument",
@@ -22,9 +27,12 @@ __all__ = [
     "fetch_url",
     "process_pdf_bytes",
     "GeoJSONResult",
+    "MunicipalityTemplate",
     "MunicipalWebScraper",
     "ScrapedLink",
     "ScrapePageResult",
+    "get_municipality_template",
+    "list_municipality_templates",
     "scrape_geojson_data",
     "scrape_municipal_page",
 ]
