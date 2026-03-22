@@ -10,6 +10,34 @@ from app.services.zone_spatial import parse_geometry_dict, point_in_geometry
 
 bp = Blueprint("zones", __name__, url_prefix="/api/v1/zones")
 
+# Curated entry points when open data does not embed per-zone PDF URLs (common for ArcGIS layers).
+MUNICIPALITY_PUBLIC_RESOURCES: dict[str, list[dict[str, str]]] = {
+    "waterloo": [
+        {
+            "label": "Zoning Bylaw & maps (City of Waterloo)",
+            "url": "https://www.waterloo.ca/en/government/zoning-bylaw.aspx",
+        },
+        {
+            "label": "Planning & land use data",
+            "url": "https://www.waterloo.ca/en/government/planning-and-land-use-data.aspx",
+        },
+        {
+            "label": "Interactive zoning map",
+            "url": "https://maps.waterloo.ca/html5viewer/?viewer=waterlooviewer&layerTheme=Zoning",
+        },
+    ],
+    "kitchener": [
+        {
+            "label": "Zoning (City of Kitchener)",
+            "url": "https://www.kitchener.ca/en/development-and-construction/zoning.aspx",
+        },
+        {
+            "label": "Zoning bylaw (searchable)",
+            "url": "https://app2.kitchener.ca/appdocs/zonebylaw/",
+        },
+    ],
+}
+
 # Default map region (City of Waterloo + City of Kitchener ingested slugs)
 REGION_WATERLOO_KITCHENER_SLUGS: tuple[str, ...] = ("waterloo", "kitchener")
 _MAX_MUNICIPALITIES = 20
@@ -255,7 +283,10 @@ def zone_analyze(zone_id: int):
 
     if not app.config.get("GROQ_API_KEY"):
         rag_out["error"] = "groq_not_configured"
-        rag_out["message"] = "Set GROQ_API_KEY in the environment for RAG answers."
+        rag_out["message"] = (
+            "AI summaries need GROQ_API_KEY on the server. "
+            "You can still use official city links and open data below."
+        )
     else:
         try:
             result = run_rag(
@@ -276,11 +307,24 @@ def zone_analyze(zone_id: int):
             rag_out["error"] = "rag_failed"
             rag_out["message"] = str(exc)
 
+    by_status: dict[str, int] = {}
+    for row in ingest_results:
+        st = str(row.get("status") or "unknown")
+        by_status[st] = by_status.get(st, 0) + 1
+    linked_pdf_count = len(record_detail.get("sourceDocuments") or [])
+
     return jsonify(
         {
             "zoneId": zone_id,
             "record": record_detail,
-            "ingest": {"results": ingest_results},
+            "ingest": {
+                "results": ingest_results,
+                "summary": {
+                    "linkedPdfUrlsInOpenData": linked_pdf_count,
+                    "rows": len(ingest_results),
+                    "byStatus": by_status,
+                },
+            },
             "rag": rag_out,
         }
     ), 200
@@ -318,4 +362,6 @@ def _serialize_zone_detail(record: ZoningRecord) -> dict[str, object]:
             pass
     base["geometry"] = geom
     base["sourceDocuments"] = docs
+    slug = (record.municipality or "").strip().lower()
+    base["publicResources"] = list(MUNICIPALITY_PUBLIC_RESOURCES.get(slug, []))
     return base

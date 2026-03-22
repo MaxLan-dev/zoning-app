@@ -70,7 +70,22 @@ def test_at_point_finds_zone(client, app):
     assert data["matchCount"] == 1
     assert data["matches"][0]["zoneCode"] == "R1"
     assert "https://example.com/bylaw.pdf" in data["matches"][0]["sourceDocuments"]
+    assert data["matches"][0]["publicResources"] == []
     assert data["municipalitiesSearched"] == ["demo"]
+
+
+def test_at_point_includes_public_resources_for_waterloo(client, app):
+    with app.app_context():
+        _add_zone_square(municipality="waterloo", zone_code="Z1", source_object_id="w99")
+    res = client.get(
+        "/api/v1/zones/at-point?lat=45.5&lng=-67.5&municipality=waterloo",
+    )
+    assert res.status_code == 200
+    data = res.get_json()
+    assert data["matchCount"] == 1
+    pr = data["matches"][0]["publicResources"]
+    assert len(pr) >= 1
+    assert any("waterloo.ca" in item["url"] for item in pr)
 
 
 def test_geojson_region_waterloo_kitchener_merges(client, app):
@@ -141,6 +156,7 @@ def test_zone_analyze_returns_record_and_ingest(client, app, monkeypatch):
     assert data["zoneId"] == zid
     assert data["record"]["zoneCode"] == "Z9"
     assert data["ingest"]["results"][0]["status"] == "skipped"
+    assert data["ingest"]["summary"]["linkedPdfUrlsInOpenData"] == 1
     assert data["rag"]["answer"] == "Test answer."
 
 

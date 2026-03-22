@@ -41,6 +41,31 @@ def test_normalize_kitchener_feature_collection():
     assert record["sourceDocuments"] == ["https://example.org/bylaw.pdf"]
 
 
+def test_normalize_picks_url_from_bylaw_url_field():
+    template = get_municipality_template("kitchener")
+    result = normalize_zoning_feature_collection(
+        municipality=template,
+        source_url="https://example.org/source",
+        geojson_url="https://example.org/geojson",
+        feature_collection={
+            "type": "FeatureCollection",
+            "features": [
+                {
+                    "type": "Feature",
+                    "properties": {
+                        "OBJECTID": 11,
+                        "ZONE_CLASS": "C1",
+                        "BYLAW_URL": "https://example.org/c1-bylaw.pdf",
+                    },
+                    "geometry": {"type": "Polygon", "coordinates": []},
+                }
+            ],
+        },
+    )
+    assert result.normalized_count == 1
+    assert result.records[0]["sourceDocuments"] == ["https://example.org/c1-bylaw.pdf"]
+
+
 def test_normalize_skips_missing_zone_code():
     template = get_municipality_template("kitchener")
     result = normalize_zoning_feature_collection(

@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState } from 'react'
-import { GeoJSON, MapContainer, Popup, TileLayer, ZoomControl, useMap } from 'react-leaflet'
-import type { Feature, GeoJsonObject, Polygon } from 'geojson'
+import L from 'leaflet'
+import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
+import { GeoJSON, MapContainer, TileLayer, useMap, ZoomControl } from 'react-leaflet'
+import type { Feature, FeatureCollection, GeoJsonObject } from 'geojson'
 import {
   ArrowUpRight,
   Braces,
@@ -20,46 +21,53 @@ import {
   UserCircle2,
 } from 'lucide-react'
 import './App.css'
-import {
-  districtPlanOverlays,
-  floodplainOverlays,
-  mockZones,
-  municipalities,
-  neighborhoodOverlays,
-  savedViews,
-  type EvidenceItem,
-  type OverlayFeature,
-  type ZoneRecord,
-} from './mockData'
 
-type Health = { status: string; service: string }
+/** Query string for Waterloo + Kitchener (matches backend `REGION_WATERLOO_KITCHENER_SLUGS`). */
+const REGION_QS = 'region=waterloo-kitchener'
 
-type UploadResult = {
-  document_id: string
-  chunks_indexed: number
-  total_pages: number
-  original_filename: string
-  uploaded_at: string
-  collection: string
+/** Map pan limit — Kitchener + Waterloo (WGS84). */
+const WK_MAX_BOUNDS = L.latLngBounds([43.37, -80.65], [43.58, -80.32])
+const WK_CENTER: L.LatLngTuple = [43.475, -80.485]
+
+const API = {
+  health: '/api/v1/health',
+  zonesRegionSummary: `/api/v1/zones/region-summary?${REGION_QS}`,
+  zonesGeojson: `/api/v1/zones/geojson?${REGION_QS}`,
+  zonesAtPoint: (lat: number, lng: number) =>
+    `/api/v1/zones/at-point?lat=${lat}&lng=${lng}&${REGION_QS}`,
+  zone: (id: number) => `/api/v1/zones/${id}`,
+  zoneIngestDocs: (id: number) => `/api/v1/zones/${id}/ingest-documents`,
+  zoneAnalyze: (id: number) => `/api/v1/zones/${id}/analyze`,
+  rag: '/api/v1/rag',
+  documentsUpload: '/api/v1/documents/upload',
+} as const
+
+type HealthRes = { status: string; service: string }
+
+type RegionSummaryRes = {
+  region: string
+  municipalities: string[]
+  totalZones: number
+  countByMunicipality: Record<string, number>
 }
 
-type ZoneApiSummary = {
-  total: number
-}
+type PublicResource = { label: string; url: string }
 
-type SearchResult =
-  | { id: string; kind: 'municipality'; label: string; municipality: string }
-  | { id: string; kind: 'zone'; label: string; zoneId: string }
-  | { id: string; kind: 'saved'; label: string; savedViewId: string }
-
-type Filters = {
+type ZoneMatch = {
+  id: number
   municipality: string
-  zoneCategory: string
-  housingType: string
-  heightBand: string
-  parkingBand: string
-  densityBand: string
-  setbackBand: string
+  zoneCode: string
+  zoneType?: string | null
+  zoneName?: string | null
+  status?: string | null
+  bylawNumber?: string | null
+  effectiveDate?: string | null
+  sourceObjectId: string
+  sourceDocuments: string[]
+  publicResources?: PublicResource[]
+  sourceUrl?: string
+  geojsonUrl?: string
+  lastRunId?: string | null
 }
 
 type LayerVisibility = {
@@ -77,57 +85,49 @@ type AiSource = {
   url?: string
 }
 
-type AiResponse = {
-  mode: 'live' | 'mock'
-  question: string
-  answer: string
-  sources: AiSource[]
+type RagRes = {
+  query?: string
+  answer?: string
+  sources?: RagSource[]
+  model?: string
+  error?: string
+  message?: string
 }
 
-type BoundsTuple = [[number, number], [number, number]]
-
-const defaultFilters: Filters = {
-  municipality: '',
-  zoneCategory: '',
-  housingType: '',
-  heightBand: '',
-  parkingBand: '',
-  densityBand: '',
-  setbackBand: '',
+type UploadResult = {
+  document_id: string
+  chunks_indexed: number
+  total_pages: number
+  original_filename: string
+  uploaded_at: string
+  collection: string
 }
 
-const defaultLayerVisibility: LayerVisibility = {
-  zoning: true,
-  neighborhoods: true,
-  districtPlans: true,
-  floodplain: true,
+type IngestResultRow = {
+  status?: string
+  source_url?: string
+  document_id?: string
+  message?: string
+  error?: string
+  chunks_indexed?: number
 }
 
-const zoneCategoryPalette: Record<string, string> = {
-  'Residential Mixed Use': '#3569d4',
-  'Residential Medium Density': '#7891d0',
-  'Downtown Mixed Use': '#1d8c76',
-  'Mixed Use Corridor': '#2d9e85',
-  'Mid-Rise Residential': '#5471c9',
-  'Low-Rise Residential': '#c58a54',
+type ZoneRecordDetail = ZoneMatch & {
+  geometry?: unknown
 }
 
-function formatNumber(value: number) {
-  return new Intl.NumberFormat('en-CA').format(value)
-}
-
-function zoneFill(zone: ZoneRecord) {
-  return zoneCategoryPalette[zone.zoneCategory] ?? '#5c6bc0'
-}
-
-function getStatusChips(zone: ZoneRecord) {
-  const chips: string[] = []
-  if (zone.multiFamilyAllowed) chips.push('Multi-family allowed')
-  if (zone.additionalUnitAllowed) chips.push('Additional unit allowed')
-  if (zone.maxHeightM <= 12) chips.push('Height restrictive')
-  if (zone.parkingSpacesPerUnit > 1.2) chips.push('Parking-heavy')
-  if (zone.floodplain) chips.push('Floodplain overlay')
-  return chips
+type AnalyzeResponse = {
+  zoneId: number
+  record: ZoneRecordDetail
+  ingest: {
+    results: IngestResultRow[]
+    summary?: {
+      linkedPdfUrlsInOpenData: number
+      rows: number
+      byStatus: Record<string, number>
+    }
+  }
+  rag: RagRes & { query?: string }
 }
 
 function featureBounds(geojson: Feature<Polygon>): BoundsTuple {
@@ -160,87 +160,71 @@ function featureBounds(geojson: Feature<Polygon>): BoundsTuple {
   ]
 }
 
-function mergeZoneBounds(zones: ZoneRecord[]): BoundsTuple {
-  let west = Number.POSITIVE_INFINITY
-  let south = Number.POSITIVE_INFINITY
-  let east = Number.NEGATIVE_INFINITY
-  let north = Number.NEGATIVE_INFINITY
-
-  zones.forEach((zone) => {
-    const [[zoneSouth, zoneWest], [zoneNorth, zoneEast]] = featureBounds(zone.geometry)
-    west = Math.min(west, zoneWest)
-    south = Math.min(south, zoneSouth)
-    east = Math.max(east, zoneEast)
-    north = Math.max(north, zoneNorth)
-  })
-
-  return [
-    [south, west],
-    [north, east],
-  ]
-}
-
-function matchesHeightBand(zone: ZoneRecord, value: string) {
-  if (!value) return true
-  if (value === 'low') return zone.maxHeightM <= 12
-  if (value === 'mid') return zone.maxHeightM > 12 && zone.maxHeightM <= 20
-  if (value === 'high') return zone.maxHeightM > 20
-  return true
-}
-
-function matchesParkingBand(zone: ZoneRecord, value: string) {
-  if (!value) return true
-  if (value === 'low') return zone.parkingSpacesPerUnit <= 0.9
-  if (value === 'mid') {
-    return zone.parkingSpacesPerUnit > 0.9 && zone.parkingSpacesPerUnit <= 1.2
+function redactAnalyzeForClipboard(data: AnalyzeResponse): AnalyzeResponse {
+  const record = { ...data.record }
+  if (record.geometry != null) {
+    record.geometry = {
+      _redacted: true,
+      geojsonType: geometrySummary(record.geometry),
+    }
   }
-  if (value === 'heavy') return zone.parkingSpacesPerUnit > 1.2
-  return true
+  return { ...data, record }
 }
 
-function matchesDensityBand(zone: ZoneRecord, value: string) {
-  if (!value) return true
-  if (value === 'low') return zone.densityUnitsPerHectare <= 75
-  if (value === 'mid') {
-    return zone.densityUnitsPerHectare > 75 && zone.densityUnitsPerHectare <= 200
+function titleCaseMunicipality(value: string) {
+  return value.charAt(0).toUpperCase() + value.slice(1)
+}
+
+function formatRagError(message: string) {
+  if (message.includes('Index required but not found')) {
+    return 'Zone-scoped evidence filters were not ready in the vector index yet. Retry now that the backend has created the needed indexes, or ingest linked PDFs for this zone first.'
   }
-  if (value === 'high') return zone.densityUnitsPerHectare > 200
-  return true
-}
-
-function matchesSetbackBand(zone: ZoneRecord, value: string) {
-  if (!value) return true
-  if (value === 'urban') return zone.setbacks.front <= 3
-  if (value === 'buffered') return zone.setbacks.front > 3
-  return true
-}
-
-function buildMockAnswer(zone: ZoneRecord, question: string): AiResponse {
-  const focus = question.toLowerCase()
-  let answer =
-    `${zone.zoneCode} in ${zone.neighborhood}, ${zone.municipality} allows ` +
-    `${zone.permittedHousing.join(', ').toLowerCase()} with a maximum height of ` +
-    `${zone.maxHeightM}m, ${zone.parkingRequirement.toLowerCase()}, and ` +
-    `${zone.density.toLowerCase()}`
-
-  if (focus.includes('parking')) {
-    answer =
-      `${zone.zoneCode} applies ${zone.parkingRequirement.toLowerCase()} ` +
-      `This is ${zone.parkingSpacesPerUnit > 1.2 ? 'relatively parking-heavy' : 'relatively supportive of lower parking supply'} ` +
-      `compared with the other sample zones.`
-  } else if (focus.includes('height')) {
-    answer =
-      `${zone.zoneCode} permits a maximum building height of ${zone.maxHeightM} metres. ` +
-      `${zone.maxHeightM <= 12 ? 'That height limit is comparatively restrictive for multifamily projects.' : 'That envelope supports mid-rise or taller housing forms depending on site design.'}`
-  } else if (focus.includes('adu') || focus.includes('additional')) {
-    answer =
-      `${zone.additionalUnitRule} ` +
-      `${zone.additionalUnitAllowed ? 'The zone is generally supportive of additional units.' : 'Additional unit permissions are limited in this zone.'}`
-  } else if (focus.includes('afford')) {
-    answer =
-      `${zone.whyItMatters} Based on the current mock scoring, the affordability impact is rated ${zone.affordabilityImpact.toLowerCase()} and the restriction score is ${zone.restrictionScore}/100.`
+  if (message.includes('groq_not_configured')) {
+    return 'RAG is not configured yet. Add `GROQ_API_KEY` in the repo-root `.env` file and restart the backend.'
   }
+  return message
+}
 
+function FormattedRagAnswer({ text }: { text: string }) {
+  const paragraphs = text
+    .split(/\n{2,}/)
+    .map((p) => p.trim())
+    .filter(Boolean)
+  return (
+    <div className="rag-prose">
+      {paragraphs.map((para, i) => {
+        const lines = para.split('\n')
+        const nonEmpty = lines.map((l) => l.trim()).filter(Boolean)
+        const allBullets =
+          nonEmpty.length > 1 &&
+          nonEmpty.every((l) => /^(\d+[\).]|[•\-*])\s/.test(l))
+        if (allBullets) {
+          return (
+            <ul key={i} className="rag-list">
+              {nonEmpty.map((l, j) => (
+                <li key={j}>{l.replace(/^(\d+[\).]|[•\-*])\s+/, '')}</li>
+              ))}
+            </ul>
+          )
+        }
+        return (
+          <p key={i}>
+            {lines.map((line, j) => (
+              <Fragment key={j}>
+                {line}
+                {j < lines.length - 1 ? <br /> : null}
+              </Fragment>
+            ))}
+          </p>
+        )
+      })}
+    </div>
+  )
+}
+
+function geoJsonStyle(feature?: Feature): L.PathOptions {
+  const m = (feature?.properties as { municipality?: string } | undefined)?.municipality
+  const kitchener = m === 'kitchener'
   return {
     mode: 'mock',
     question,
@@ -433,156 +417,85 @@ function App() {
     void loadApiState()
   }, [])
 
-  const selectedZone =
-    mockZones.find((zone) => zone.id === selectedZoneId) ?? mockZones[0]
+  useEffect(() => {
+    void loadDashboard()
+    void loadGeojson()
+  }, [loadDashboard, loadGeojson])
 
-  const visibleZones = useMemo(() => {
-    const search = searchQuery.trim().toLowerCase()
-
-    return mockZones.filter((zone) => {
-      const matchesMunicipality =
-        !filters.municipality || zone.municipality === filters.municipality
-      const matchesZoneCategory =
-        !filters.zoneCategory || zone.zoneCategory === filters.zoneCategory
-      const matchesHousing =
-        !filters.housingType || zone.permittedHousing.includes(filters.housingType)
-      const matchesSearch =
-        !search ||
-        zone.areaName.toLowerCase().includes(search) ||
-        zone.municipality.toLowerCase().includes(search) ||
-        zone.neighborhood.toLowerCase().includes(search) ||
-        zone.zoneCode.toLowerCase().includes(search)
-
-      return (
-        matchesMunicipality &&
-        matchesZoneCategory &&
-        matchesHousing &&
-        matchesSearch &&
-        matchesHeightBand(zone, filters.heightBand) &&
-        matchesParkingBand(zone, filters.parkingBand) &&
-        matchesDensityBand(zone, filters.densityBand) &&
-        matchesSetbackBand(zone, filters.setbackBand)
-      )
-    })
-  }, [filters, searchQuery])
-
-  const searchResults = useMemo<SearchResult[]>(() => {
-    const query = searchQuery.trim().toLowerCase()
-    if (!query) return []
-
-    const municipalityMatches = municipalities
-      .filter((municipality) => municipality.toLowerCase().includes(query))
-      .map((municipality) => ({
-        id: `municipality-${municipality}`,
-        kind: 'municipality' as const,
-        label: municipality,
-        municipality,
-      }))
-
-    const zoneMatches = mockZones
-      .filter((zone) => {
-        return (
-          zone.areaName.toLowerCase().includes(query) ||
-          zone.neighborhood.toLowerCase().includes(query) ||
-          zone.zoneCode.toLowerCase().includes(query)
-        )
-      })
-      .slice(0, 6)
-      .map((zone) => ({
-        id: `zone-${zone.id}`,
-        kind: 'zone' as const,
-        label: `${zone.areaName} · ${zone.zoneCode}`,
-        zoneId: zone.id,
-      }))
-
-    const savedMatches = savedViews
-      .filter((savedView) => savedView.name.toLowerCase().includes(query))
-      .map((savedView) => ({
-        id: `saved-${savedView.id}`,
-        kind: 'saved' as const,
-        label: savedView.name,
-        savedViewId: savedView.id,
-      }))
-
-    return [...municipalityMatches, ...zoneMatches, ...savedMatches].slice(0, 7)
-  }, [searchQuery])
-
-  const comparedZones = mockZones.filter((zone) => compareZoneIds.includes(zone.id))
-
-  const summaryMatchesCount = visibleZones.length
-  const multiFamilyCount = visibleZones.filter((zone) => zone.multiFamilyAllowed).length
-  const averageRestriction = Math.round(
-    visibleZones.reduce((sum, zone) => sum + zone.restrictionScore, 0) /
-      Math.max(1, visibleZones.length),
-  )
-
-  const evidenceFeed: AiSource[] = aiResponse?.sources ?? selectedZone.evidence.map((item) => ({
-    id: item.id,
-    label: item.title,
-    excerpt: item.excerpt,
-    citation: item.citation,
-    url: item.url,
-  }))
-
-  const availableZoneCategories = [...new Set(mockZones.map((zone) => zone.zoneCategory))]
-  const availableHousingTypes = [
-    ...new Set(mockZones.flatMap((zone) => zone.permittedHousing)),
-  ].sort((left, right) => left.localeCompare(right))
-
-  function pushRecentQuery(value: string) {
-    setRecentQueries((previous) => [value, ...previous.filter((item) => item !== value)].slice(0, 5))
-  }
-
-  function focusZones(zones: ZoneRecord[]) {
-    if (zones.length) {
-      setMapBounds(mergeZoneBounds(zones))
-    }
-  }
-
-  function selectZone(zone: ZoneRecord) {
-    setSelectedZoneId(zone.id)
-    setActivePopupZoneId(zone.id)
-    setMapBounds(featureBounds(zone.geometry))
-    setBottomTab('analytics')
-  }
-
-  function applySavedView(savedViewId: string) {
-    const savedView = savedViews.find((item) => item.id === savedViewId)
-    if (!savedView) return
-
-    const zones = mockZones.filter((zone) => savedView.zoneIds.includes(zone.id))
-    setCompareZoneIds(savedView.zoneIds)
-    setBottomPanelOpen(true)
-    setBottomTab('comparison')
-    setSearchQuery(savedView.name)
-    pushRecentQuery(savedView.name)
-    focusZones(zones)
-    if (zones[0]) {
-      setSelectedZoneId(zones[0].id)
-      setActivePopupZoneId(zones[0].id)
-    }
-  }
-
-  function handleSearchSelection(result: SearchResult) {
-    if (result.kind === 'municipality') {
-      const zones = mockZones.filter((zone) => zone.municipality === result.municipality)
-      setFilters((previous) => ({ ...previous, municipality: result.municipality }))
-      setSearchQuery(result.label)
-      pushRecentQuery(result.label)
-      focusZones(zones)
-      if (zones[0]) {
-        setSelectedZoneId(zones[0].id)
-        setActivePopupZoneId(zones[0].id)
+  const runAtPoint = useCallback(async (lat: number, lng: number) => {
+    setAtPointLoading(true)
+    setAtPointError(null)
+    setClickLabel(`${lat.toFixed(5)}, ${lng.toFixed(5)}`)
+    try {
+      const res = await fetch(API.zonesAtPoint(lat, lng))
+      const data = (await res.json()) as AtPointRes & { error?: string; message?: string }
+      if (!res.ok) {
+        setAtPointError(data.message ?? data.error ?? `HTTP ${res.status}`)
+        setMatches([])
+        setMatchPick(0)
+        return
       }
-      return
+      setMatches(data.matches ?? [])
+      setMatchPick(0)
+    } catch {
+      setAtPointError('Could not reach at-point API.')
+      setMatches([])
+      setMatchPick(0)
+    } finally {
+      setAtPointLoading(false)
     }
+  }, [])
 
-    if (result.kind === 'zone') {
-      const zone = mockZones.find((item) => item.id === result.zoneId)
-      if (!zone) return
-      setSearchQuery(zone.areaName)
-      pushRecentQuery(`${zone.municipality} ${zone.zoneCode}`)
-      selectZone(zone)
+  const runAnalyze = useCallback(async (zoneId: number, customQ?: string) => {
+    setAnalyzeLoading(true)
+    setAnalyzeError(null)
+    setAnalyzeData(null)
+    try {
+      const res = await fetch(API.zoneAnalyze(zoneId), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(
+          customQ !== undefined && customQ.trim() ? { q: customQ.trim() } : {},
+        ),
+      })
+      const data = (await res.json()) as AnalyzeResponse & {
+        error?: string
+        message?: string
+      }
+      if (!res.ok) {
+        setAnalyzeError(data.message ?? data.error ?? `HTTP ${res.status}`)
+        setAnalyzeData(null)
+        return
+      }
+      setAnalyzeData(data)
+      const rag = data.rag
+      setRagError(null)
+      if (rag.error) {
+        setRagData(null)
+        setRagError(rag.message ?? String(rag.error))
+      } else {
+        setRagData({
+          query: rag.query,
+          answer: rag.answer,
+          sources: rag.sources,
+          model: rag.model,
+        })
+      }
+    } catch {
+      setAnalyzeError('Analyze failed (network).')
+      setAnalyzeData(null)
+    } finally {
+      setAnalyzeLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!selected?.id) {
+      setAnalyzeData(null)
+      setAnalyzeError(null)
+      setAnalyzeLoading(false)
+      setRagData(null)
+      setRagError(null)
       return
     }
 
@@ -821,283 +734,355 @@ function App() {
               />
             </div>
           </div>
-
-          <div className="service-card">
-            <div className="service-card__header">
-              <div>
-                <span>System health</span>
-                <strong>API and evidence services</strong>
-              </div>
-              {healthLoading ? (
-                <div className="status-skeleton" />
-              ) : (
-                <span className={`health-pill ${health ? 'health-pill--ok' : 'health-pill--offline'}`}>
-                  {health ? `${health.service}: ${health.status}` : 'Demo mode'}
-                </span>
-              )}
-            </div>
-            {appError ? (
-              <div className="inline-alert">
-                <TriangleAlert size={16} />
-                <span>{appError}</span>
-              </div>
-            ) : (
-              <p className="muted-copy">
-                Live upload and RAG workflows are available when the backend is running through the
-                Vite proxy.
-              </p>
+          <p className="hint">
+            <MapPin size={14} /> Click a zone polygon. Blue ≈ Waterloo, terracotta ≈ Kitchener.
+            {summary && (
+              <>
+                {' '}
+                Indexed:{' '}
+                <strong>{summary.totalZones}</strong> zones (
+                {summary.municipalities.map((m) => (
+                  <span key={m}>
+                    {m}: {summary.countByMunicipality[m] ?? 0}{' '}
+                  </span>
+                ))}
+                ).
+              </>
             )}
-          </div>
+          </p>
+        </section>
 
-          <details className="accordion" open>
-            <summary>Search municipality / address / neighborhood</summary>
-            <div className="accordion__body">
-              <label className="field">
-                <span>Explore places</span>
-                <div className="search-field">
-                  <Search size={16} />
-                  <input
-                    type="text"
-                    value={searchQuery}
-                    placeholder="Waterloo, Uptown, RMU-20..."
-                    onChange={(event) => setSearchQuery(event.target.value)}
-                  />
-                </div>
-              </label>
-              {searchResults.length > 0 && (
-                <div className="search-results">
-                  {searchResults.map((result) => (
-                    <button
-                      key={result.id}
-                      type="button"
-                      className="search-result"
-                      onClick={() => handleSearchSelection(result)}
-                    >
-                      <span>{result.label}</span>
-                      <small>{result.kind}</small>
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-          </details>
+        <aside className="panel side">
+          <section className="info-card">
+            <h2 className="h2">How to use this</h2>
+            <ol className="steps">
+              <li>Click a zoning polygon on the map to load the selected zone.</li>
+              <li>Ingest linked PDFs for that zone, or upload your own PDF.</li>
+              <li>Ask a zoning question and review the cited sources.</li>
+            </ol>
+          </section>
 
-          <details className="accordion" open>
-            <summary>Filters</summary>
-            <div className="accordion__body">
-              <FilterSelect
-                label="Municipality"
-                value={filters.municipality}
-                onChange={(value) =>
-                  setFilters((previous) => ({
-                    ...previous,
-                    municipality: value,
-                  }))
-                }
-                options={[
-                  { value: '', label: 'All municipalities' },
-                  ...municipalities.map((item) => ({ value: item, label: item })),
-                ]}
-              />
-              <FilterSelect
-                label="Zone type"
-                value={filters.zoneCategory}
-                onChange={(value) =>
-                  setFilters((previous) => ({
-                    ...previous,
-                    zoneCategory: value,
-                  }))
-                }
-                options={[
-                  { value: '', label: 'All zone categories' },
-                  ...availableZoneCategories.map((item) => ({ value: item, label: item })),
-                ]}
-              />
-              <FilterSelect
-                label="Housing type allowed"
-                value={filters.housingType}
-                onChange={(value) =>
-                  setFilters((previous) => ({
-                    ...previous,
-                    housingType: value,
-                  }))
-                }
-                options={[
-                  { value: '', label: 'Any housing type' },
-                  ...availableHousingTypes.map((item) => ({ value: item, label: item })),
-                ]}
-              />
-              <FilterSelect
-                label="Height restrictions"
-                value={filters.heightBand}
-                onChange={(value) =>
-                  setFilters((previous) => ({
-                    ...previous,
-                    heightBand: value,
-                  }))
-                }
-                options={[
-                  { value: '', label: 'Any height band' },
-                  { value: 'low', label: 'Low-rise (<= 12m)' },
-                  { value: 'mid', label: 'Mid-rise (12m to 20m)' },
-                  { value: 'high', label: 'Tall / permissive (> 20m)' },
-                ]}
-              />
-              <FilterSelect
-                label="Parking requirements"
-                value={filters.parkingBand}
-                onChange={(value) =>
-                  setFilters((previous) => ({
-                    ...previous,
-                    parkingBand: value,
-                  }))
-                }
-                options={[
-                  { value: '', label: 'Any parking profile' },
-                  { value: 'low', label: 'Low parking (<= 0.9 spaces)' },
-                  { value: 'mid', label: 'Moderate parking' },
-                  { value: 'heavy', label: 'Parking-heavy (> 1.2 spaces)' },
-                ]}
-              />
-              <FilterSelect
-                label="Density restrictions"
-                value={filters.densityBand}
-                onChange={(value) =>
-                  setFilters((previous) => ({
-                    ...previous,
-                    densityBand: value,
-                  }))
-                }
-                options={[
-                  { value: '', label: 'Any density level' },
-                  { value: 'low', label: 'Low density (<= 75 units/ha)' },
-                  { value: 'mid', label: 'Mid density' },
-                  { value: 'high', label: 'High density (> 200 units/ha)' },
-                ]}
-              />
-              <FilterSelect
-                label="Setback rules"
-                value={filters.setbackBand}
-                onChange={(value) =>
-                  setFilters((previous) => ({
-                    ...previous,
-                    setbackBand: value,
-                  }))
-                }
-                options={[
-                  { value: '', label: 'Any frontage condition' },
-                  { value: 'urban', label: 'Urban frontage (<= 3m front setback)' },
-                  { value: 'buffered', label: 'Buffered frontage (> 3m)' },
-                ]}
-              />
-            </div>
-          </details>
-
-          <details className="accordion" open>
-            <summary>Layers</summary>
-            <div className="accordion__body">
-              {[
-                ['zoning', 'Zoning polygons'],
-                ['neighborhoods', 'Planning communities'],
-                ['districtPlans', 'District plans'],
-                ['floodplain', 'Floodplain overlays'],
-              ].map(([key, label]) => (
-                <label className="checkbox-row" key={key}>
-                  <input
-                    type="checkbox"
-                    checked={layers[key as keyof LayerVisibility]}
-                    onChange={() =>
-                      setLayers((previous) => ({
-                        ...previous,
-                        [key]: !previous[key as keyof LayerVisibility],
-                      }))
-                    }
-                  />
-                  <span>{label}</span>
-                </label>
-              ))}
-            </div>
-          </details>
-
-          <details className="accordion" open>
-            <summary>Saved views / recent queries</summary>
-            <div className="accordion__body">
-              <div className="saved-views">
-                {savedViews.map((view) => (
-                  <button
-                    key={view.id}
-                    type="button"
-                    className="saved-view-card"
-                    onClick={() => applySavedView(view.id)}
-                  >
-                    <strong>{view.name}</strong>
-                    <span>{view.description}</span>
-                  </button>
+          <h2 className="h2">Selected zone</h2>
+          {atPointError && <p className="err">{atPointError}</p>}
+          {atPointLoading && (
+            <p className="muted">
+              <Loader2 size={14} className="spin" /> Resolving{' '}
+              {clickLabel ?? '…'}
+            </p>
+          )}
+          {!atPointLoading && matches.length === 0 && clickLabel && (
+            <p className="muted">No zone at this location ({clickLabel}).</p>
+          )}
+          {!atPointLoading && matches.length === 0 && !clickLabel && (
+            <p className="muted">Click the map to select a zoning polygon.</p>
+          )}
+          {matches.length > 1 && (
+            <label className="field">
+              <span>Multiple overlaps — pick one</span>
+              <select
+                value={matchPick}
+                onChange={(e) => setMatchPick(Number(e.target.value))}
+              >
+                {matches.map((m, i) => (
+                  <option key={`${m.id}-${i}`} value={i}>
+                    {m.municipality} · {m.zoneCode} (id {m.id})
+                  </option>
                 ))}
-              </div>
-              <div className="recent-list">
-                {recentQueries.map((query) => (
-                  <button
-                    key={query}
-                    type="button"
-                    className="recent-list__item"
-                    onClick={() => setSearchQuery(query)}
-                  >
-                    {query}
-                  </button>
-                ))}
-              </div>
-            </div>
-          </details>
-        </aside>
-
-        <section className="map-panel panel-surface">
-          <div className="map-panel__header">
-            <div>
-              <span className="eyebrow">Spatial Explorer</span>
-              <h2>Interactive zoning map</h2>
-            </div>
-            <div className="map-panel__meta">
-              <span>{visibleZones.length} visible polygons</span>
-              <span>{compareZoneIds.length} areas selected for compare</span>
-            </div>
-          </div>
-
-          <div className="map-panel__canvas">
-            {showHelp && (
-              <div className="map-callout">
-                <div className="map-callout__title">
-                  <Sparkles size={16} />
-                  <strong>Demo-ready zoning intelligence workspace</strong>
+              </select>
+            </label>
+          )}
+          {selected && (
+            <div className="zone-card">
+              <div className="zone-hero">
+                <div className="zone-hero__row">
+                  <span className="zone-hero__code">{selected.zoneCode}</span>
+                  <span className="badge badge--mun">{titleCaseMunicipality(selected.municipality)}</span>
                 </div>
-                <p>
-                  Click a polygon to open the details drawer, compare zones in the lower panel,
-                  and use the evidence workspace to test the upload and RAG flows.
+                {selected.zoneName && (
+                  <p className="zone-hero__name">{selected.zoneName}</p>
+                )}
+                <div className="zone-meta-row">
+                  <span className="mini-pill">Zone id {selected.id}</span>
+                  {selected.zoneType && <span className="mini-pill">{selected.zoneType}</span>}
+                  {selected.status && <span className="mini-pill">{selected.status}</span>}
+                </div>
+              </div>
+
+              <section className="zone-section">
+                <h3 className="h3">Open data · this polygon</h3>
+                <dl className="dl dl--compact">
+                  {selected.zoneType && (
+                    <>
+                      <dt>Category</dt>
+                      <dd>{selected.zoneType}</dd>
+                    </>
+                  )}
+                  {selected.status && (
+                    <>
+                      <dt>Status</dt>
+                      <dd>{selected.status}</dd>
+                    </>
+                  )}
+                  {selected.bylawNumber && (
+                    <>
+                      <dt>Bylaw ref.</dt>
+                      <dd>{selected.bylawNumber}</dd>
+                    </>
+                  )}
+                  {selected.effectiveDate && (
+                    <>
+                      <dt>Effective</dt>
+                      <dd>{selected.effectiveDate}</dd>
+                    </>
+                  )}
+                  <dt>Feature ID</dt>
+                  <dd>
+                    <code className="inline-code">{selected.sourceObjectId}</code>
+                  </dd>
+                </dl>
+              </section>
+
+              <section className="zone-section">
+                <h3 className="h3">Data feeds</h3>
+                <ul className="resource-links">
+                  {selected.geojsonUrl && (
+                    <li>
+                      <a href={selected.geojsonUrl} target="_blank" rel="noreferrer">
+                        Zoning GeoJSON layer <ExternalLink size={12} />
+                      </a>
+                    </li>
+                  )}
+                  {selected.sourceUrl && (
+                    <li>
+                      <a href={selected.sourceUrl} target="_blank" rel="noreferrer">
+                        Map service (ArcGIS) <ExternalLink size={12} />
+                      </a>
+                    </li>
+                  )}
+                </ul>
+              </section>
+
+              <section className="zone-section zone-section--insights">
+                <h3 className="h3 h3--insights">
+                  <Sparkles size={17} strokeWidth={2} /> AI insights
+                </h3>
+                <p className="muted small zone-lede">
+                  We run <code className="inline-code">POST …/analyze</code> when you pick a zone:
+                  ingest any PDF URLs stored in open data, then ask the model using retrieved text only.
                 </p>
-                <button type="button" className="text-button" onClick={() => setShowHelp(false)}>
-                  Dismiss
-                </button>
-              </div>
-            )}
-
-            <div className="floating-card floating-card--legend">
-              <div className="floating-card__title">
-                <Layers3 size={15} />
-                <span>Legend</span>
-              </div>
-              <div className="legend-list">
-                {[
-                  ['#3569d4', 'Mixed-use / higher opportunity'],
-                  ['#5471c9', 'Mid-rise residential'],
-                  ['#c58a54', 'Low-rise / restrictive'],
-                  ['#8a6ce6', 'Floodplain overlay'],
-                ].map(([color, label]) => (
-                  <div className="legend-item" key={label}>
-                    <span className="legend-swatch" style={{ background: color }} />
-                    <span>{label}</span>
+                {analyzeLoading && (
+                  <div className="callout callout--wait">
+                    <Loader2 size={18} className="spin" />
+                    <span>Indexing linked PDFs (if any) and generating an answer…</span>
                   </div>
-                ))}
-              </div>
+                )}
+                {analyzeError && <p className="err">{analyzeError}</p>}
+                {!analyzeLoading && analyzeData && (
+                  <>
+                    {analyzeData.ingest.summary && (
+                      <p className="ingest-pill muted small">
+                        <strong>Open data PDF links:</strong>{' '}
+                        {analyzeData.ingest.summary.linkedPdfUrlsInOpenData} ·{' '}
+                        <strong>Ingest rows:</strong> {analyzeData.ingest.summary.rows}
+                        {Object.keys(analyzeData.ingest.summary.byStatus).length > 0 && (
+                          <>
+                            {' '}
+                            (
+                            {Object.entries(analyzeData.ingest.summary.byStatus)
+                              .map(([k, v]) => `${k}: ${v}`)
+                              .join(', ')}
+                            )
+                          </>
+                        )}
+                      </p>
+                    )}
+                    {analyzeData.rag.error && (
+                      <div className="callout callout--warn">
+                        <strong>AI unavailable or limited.</strong>{' '}
+                        {analyzeData.rag.message ?? analyzeData.rag.error}
+                      </div>
+                    )}
+                    {analyzeData.rag.answer && (
+                      <div className="rag-answer rag-answer--hero">
+                        <FormattedRagAnswer text={analyzeData.rag.answer} />
+                        {analyzeData.rag.model && (
+                          <p className="muted small rag-model">Model: {analyzeData.rag.model}</p>
+                        )}
+                      </div>
+                    )}
+                    {analyzeData.rag.sources && analyzeData.rag.sources.length > 0 && (
+                      <div className="sources-block">
+                        <h4 className="h4">Sources used</h4>
+                        <ol className="sources">
+                          {analyzeData.rag.sources.map((s, i) => (
+                            <li key={i}>
+                              <strong>{s.human_label ?? `Passage ${i + 1}`}</strong>
+                              {s.page != null && <> · p.{s.page}</>}
+                              {s.source_url && (
+                                <div>
+                                  <a href={s.source_url} target="_blank" rel="noreferrer">
+                                    {s.source_url}
+                                  </a>
+                                </div>
+                              )}
+                            </li>
+                          ))}
+                        </ol>
+                      </div>
+                    )}
+                  </>
+                )}
+                {!analyzeLoading && !analyzeData && !analyzeError && (
+                  <p className="muted small">Waiting for zone analysis…</p>
+                )}
+              </section>
+
+              <section className="zone-section">
+                <h3 className="h3">Official city websites</h3>
+                {(selected.publicResources?.length ?? 0) > 0 ? (
+                  <ul className="resource-links">
+                    {selected.publicResources!.map((r) => (
+                      <li key={r.url}>
+                        <a href={r.url} target="_blank" rel="noreferrer">
+                          {r.label} <ExternalLink size={12} />
+                        </a>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="muted small">No curated links for this municipality slug.</p>
+                )}
+              </section>
+
+              <section className="zone-section">
+                <h3 className="h3">Bylaw PDFs from GIS metadata</h3>
+                {selected.sourceDocuments?.length ? (
+                  <ul className="link-list">
+                    {selected.sourceDocuments.map((u) => (
+                      <li key={u}>
+                        <a href={u} target="_blank" rel="noreferrer">
+                          {u.replace(/^https?:\/\//, '').slice(0, 72)}
+                          {u.length > 72 ? '…' : ''}
+                        </a>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <div className="callout callout--info">
+                    <p>
+                      <strong>No PDF URLs on this record.</strong> Waterloo and Kitchener zoning
+                      layers usually store zone codes and labels, not direct bylaw PDF links, so there
+                      is nothing to auto-ingest until we add municipal PDFs to the index (or you
+                      upload a file below).
+                    </p>
+                  </div>
+                )}
+              </section>
+
+              <details className="zone-details">
+                <summary>Technical · API &amp; ingest detail</summary>
+                <p className="muted small">
+                  <a href={API.zone(selected.id)} target="_blank" rel="noreferrer">
+                    GET {API.zone(selected.id)} <ExternalLink size={12} />
+                  </a>
+                </p>
+                {analyzeData?.ingest?.results && analyzeData.ingest.results.length > 0 && (
+                  <ul className="ingest-list ingest-list--compact">
+                    {analyzeData.ingest.results.map((row, i) => (
+                      <li key={i}>
+                        <span className={`tag tag--${row.status ?? 'unknown'}`}>
+                          {row.status ?? '?'}
+                        </span>{' '}
+                        {row.source_url && (
+                          <span className="muted small">{row.source_url.slice(0, 48)}…</span>
+                        )}
+                        {row.document_id && (
+                          <div>
+                            <code className="inline-code">{row.document_id}</code>
+                          </div>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </details>
+            </div>
+          )}
+
+          <hr className="sep" />
+
+          <h2 className="h2">Follow-up (RAG)</h2>
+          <p className="muted small">
+            Default insights come from <code>POST …/analyze</code>. Ask another question with{' '}
+            <code>POST {API.rag}</code>
+            {selected
+              ? ` — zone context: ${selected.zoneCode} (${titleCaseMunicipality(selected.municipality)})`
+              : ' — click a polygon first for zone-aware answers'}
+            .
+          </p>
+          <div className="prompt-row">
+            {promptChips.map((prompt) => (
+              <button
+                key={prompt}
+                type="button"
+                className="prompt-chip"
+                onClick={() => setRagQuestion(prompt)}
+              >
+                {prompt}
+              </button>
+            ))}
+          </div>
+          <textarea
+            className="textarea"
+            rows={3}
+            value={ragQuestion}
+            onChange={(e) => setRagQuestion(e.target.value)}
+            placeholder="Ask about permitted uses, setbacks, parking, density, or what bylaw sections to read first."
+          />
+          <button
+            type="button"
+            className="btn btn--primary"
+            disabled={ragLoading}
+            onClick={() => void runRag()}
+          >
+            {ragLoading ? <Loader2 size={16} className="spin" /> : <Sparkles size={16} />}
+            Ask
+          </button>
+          {!selected && (
+            <p className="muted small">
+              Tip: select a zone first so the answer can use zone-specific evidence and linked documents.
+            </p>
+          )}
+          {ragError && <p className="err">{ragError}</p>}
+          {ragData?.answer && (
+            <div className="rag-answer">
+              <FormattedRagAnswer text={ragData.answer} />
+              {ragData.model && (
+                <p className="muted small">Model: {ragData.model}</p>
+              )}
+              {ragData.sources && ragData.sources.length > 0 && (
+                <div>
+                  <h3 className="h3">Sources</h3>
+                  <ol className="sources">
+                    {ragData.sources.map((s, i) => (
+                      <li key={i}>
+                        <strong>{s.human_label ?? `Passage ${i + 1}`}</strong>
+                        {s.page != null && <> · p.{s.page}</>}
+                        {s.score != null && (
+                          <> · score {typeof s.score === 'number' ? s.score.toFixed(3) : s.score}</>
+                        )}
+                        {s.source_url && (
+                          <div>
+                            <a href={s.source_url} target="_blank" rel="noreferrer">
+                              {s.source_url}
+                            </a>
+                          </div>
+                        )}
+                      </li>
+                    ))}
+                  </ol>
+                </div>
+              )}
             </div>
 
             <div className="floating-card floating-card--layers">
@@ -1242,69 +1227,103 @@ function App() {
             </button>
           </div>
 
-          <div className="detail-meta">
-            <span className="detail-pill">{selectedZone.zoneCode}</span>
-            <span className="detail-pill">{selectedZone.zoneCategory}</span>
-            <span className="detail-pill">{selectedZone.zoneType}</span>
-          </div>
+            <p className="muted small">
+              <a href={API.zone(selected.id)} target="_blank" rel="noreferrer">
+                GET {API.zone(selected.id)} <ExternalLink size={12} />
+              </a>
+              {' · '}
+              <code className="inline-code">POST {API.zoneAnalyze(selected.id)}</code> ingests linked
+              PDFs and runs RAG automatically.
+            </p>
 
-          <p className="details-summary">{selectedZone.summary}</p>
+            {analyzeLoading && (
+              <p className="muted">
+                <Loader2 size={16} className="spin" /> Loading record, indexing PDFs, running RAG…
+              </p>
+            )}
+            {analyzeError && <p className="err">{analyzeError}</p>}
 
-          <div className="chip-row">
-            {getStatusChips(selectedZone).map((chip) => (
-              <span key={chip} className="status-chip">
-                {chip}
-              </span>
-            ))}
-          </div>
-
-          <div className="detail-cards">
-            <div className="detail-card">
-              <span>Permitted housing types</span>
-              <strong>{selectedZone.permittedHousing.join(', ')}</strong>
-            </div>
-            <div className="detail-card">
-              <span>Minimum lot size</span>
-              <strong>{formatNumber(selectedZone.minLotSizeSqm)} sqm</strong>
-            </div>
-            <div className="detail-card">
-              <span>Maximum building height</span>
-              <strong>{selectedZone.maxHeightM} m</strong>
-            </div>
-            <div className="detail-card">
-              <span>Parking requirements</span>
-              <strong>{selectedZone.parkingRequirement}</strong>
-            </div>
-            <div className="detail-card">
-              <span>Front / side / rear setbacks</span>
-              <strong>
-                {selectedZone.setbacks.front}m / {selectedZone.setbacks.side}m /{' '}
-                {selectedZone.setbacks.rear}m
-              </strong>
-            </div>
-            <div className="detail-card">
-              <span>Density / dwelling unit restrictions</span>
-              <strong>{selectedZone.density}</strong>
-            </div>
-            <div className="detail-card">
-              <span>Additional residential unit rules</span>
-              <strong>{selectedZone.additionalUnitRule}</strong>
-            </div>
-            <div className="detail-card">
-              <span>Affordability impact</span>
-              <strong>
-                {selectedZone.affordabilityImpact} · score {selectedZone.restrictionScore}/100
-              </strong>
-            </div>
-          </div>
-
-          <section className="content-card">
-            <div className="card-title">
-              <ShieldCheck size={16} />
-              <span>Why this matters</span>
-            </div>
-            <p>{selectedZone.whyItMatters}</p>
-          </section>
+            {analyzeData && (
+              <>
+                <section className="api-section">
+                  <h3 className="h3">Zone record</h3>
+                  <dl className="kv">
+                    <dt>Municipality</dt>
+                    <dd>{analyzeData.record.municipality}</dd>
+                    <dt>Zone code</dt>
+                    <dd>{analyzeData.record.zoneCode}</dd>
+                    {analyzeData.record.zoneType != null && analyzeData.record.zoneType !== '' && (
+                      <>
+                        <dt>Zone type</dt>
+                        <dd>{analyzeData.record.zoneType}</dd>
+                      </>
+                    )}
+                    {analyzeData.record.zoneName != null && analyzeData.record.zoneName !== '' && (
+                      <>
+                        <dt>Zone name</dt>
+                        <dd>{analyzeData.record.zoneName}</dd>
+                      </>
+                    )}
+                    {analyzeData.record.status != null && analyzeData.record.status !== '' && (
+                      <>
+                        <dt>Status</dt>
+                        <dd>{analyzeData.record.status}</dd>
+                      </>
+                    )}
+                    {analyzeData.record.bylawNumber != null &&
+                      analyzeData.record.bylawNumber !== '' && (
+                        <>
+                          <dt>Bylaw</dt>
+                          <dd>{analyzeData.record.bylawNumber}</dd>
+                        </>
+                      )}
+                    {analyzeData.record.effectiveDate != null &&
+                      analyzeData.record.effectiveDate !== '' && (
+                        <>
+                          <dt>Effective</dt>
+                          <dd>{analyzeData.record.effectiveDate}</dd>
+                        </>
+                      )}
+                    <dt>Source object</dt>
+                    <dd>
+                      <code className="inline-code">{analyzeData.record.sourceObjectId}</code>
+                    </dd>
+                    <dt>Geometry</dt>
+                    <dd className="muted">{geometrySummary(analyzeData.record.geometry)}</dd>
+                    <dt>GIS-linked PDFs</dt>
+                    <dd>
+                      {analyzeData.record.sourceDocuments?.length ? (
+                        <ul className="link-list">
+                          {analyzeData.record.sourceDocuments.map((u) => (
+                            <li key={u}>
+                              <a href={u} target="_blank" rel="noreferrer">
+                                {u}
+                              </a>
+                            </li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <span className="muted">None on this record</span>
+                      )}
+                    </dd>
+                    <dt>Official websites</dt>
+                    <dd>
+                      {analyzeData.record.publicResources?.length ? (
+                        <ul className="link-list">
+                          {analyzeData.record.publicResources.map((r) => (
+                            <li key={r.url}>
+                              <a href={r.url} target="_blank" rel="noreferrer">
+                                {r.label}
+                              </a>
+                            </li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <span className="muted">—</span>
+                      )}
+                    </dd>
+                  </dl>
+                </section>
 
           <section className="content-card">
             <div className="card-title">
@@ -1331,281 +1350,90 @@ function App() {
             </div>
           </section>
 
-          <section className="content-card">
-            <div className="card-title">
-              <Sparkles size={16} />
-              <span>Ask about this area</span>
-            </div>
-            <div className="ask-card">
-              <textarea
-                value={askInput}
-                onChange={(event) => setAskInput(event.target.value)}
-                placeholder="Ask about permitted housing, parking, setbacks, affordability, or source evidence..."
-              />
-              <button type="button" className="primary-button" onClick={() => void askQuestion()}>
-                {asking ? (
-                  <>
-                    <LoaderCircle size={16} className="spin" />
-                    Thinking
-                  </>
-                ) : (
-                  <>
-                    <Sparkles size={16} />
-                    Ask zoning AI
-                  </>
-                )}
-              </button>
-            </div>
-            {aiResponse ? (
-              <div className="ai-response">
-                <div className="ai-response__meta">
-                  <span className={`mode-pill mode-pill--${aiResponse.mode}`}>
-                    {aiResponse.mode === 'live' ? 'Live RAG answer' : 'Structured mock answer'}
-                  </span>
-                  <strong>{aiResponse.question}</strong>
-                </div>
-                <p>{aiResponse.answer}</p>
-              </div>
-            ) : (
-              <div className="empty-state">
-                <Sparkles size={18} />
-                <span>Ask a question to generate a structured zoning explanation card.</span>
-              </div>
-            )}
-          </section>
-
-          <section className="content-card">
-            <div className="card-title">
-              <Upload size={16} />
-              <span>Evidence workspace</span>
-            </div>
-            <p className="muted-copy">
-              Upload a zoning PDF to wire in the existing vectorization and evidence retrieval flow.
-            </p>
-            <label className="upload-field">
-              <input
-                type="file"
-                accept="application/pdf,.pdf"
-                onChange={(event) => void onUploadFile(event.target.files)}
-              />
-              <span>Upload source PDF</span>
-            </label>
-            {uploadStatus && <p className="muted-copy">{uploadStatus}</p>}
-            {uploadResult && (
-              <div className="upload-result-card">
-                <strong>{uploadResult.original_filename}</strong>
-                <span>
-                  {uploadResult.chunks_indexed} chunks across {uploadResult.total_pages} pages
-                </span>
-                <small>Document ID: {uploadResult.document_id}</small>
-              </div>
-            )}
-          </section>
-        </aside>
-      </main>
-
-      <section className={`bottom-panel panel-surface ${bottomPanelOpen ? '' : 'bottom-panel--collapsed'}`}>
-        <div className="bottom-panel__header">
-          <div>
-            <span className="eyebrow">Analytics &amp; comparison</span>
-            <h2>Cross-zone constraints and evidence review</h2>
-          </div>
-          <div className="bottom-panel__actions">
-            {(['comparison', 'analytics', 'evidence'] as const).map((tab) => (
-              <button
-                key={tab}
-                type="button"
-                className={`tab-button ${bottomTab === tab ? 'tab-button--active' : ''}`}
-                onClick={() => {
-                  setBottomPanelOpen(true)
-                  setBottomTab(tab)
-                }}
-              >
-                {tab}
-              </button>
-            ))}
-            <button
-              type="button"
-              className="ghost-button"
-              onClick={() => setBottomPanelOpen((previous) => !previous)}
-            >
-              {bottomPanelOpen ? 'Collapse' : 'Expand'}
-            </button>
-          </div>
-        </div>
-
-        {bottomPanelOpen && bottomTab === 'comparison' && (
-          comparedZones.length >= 2 ? (
-            <div className="comparison-layout">
-              <div className="comparison-table">
-                <div className="comparison-row comparison-row--header">
-                  <span>Area</span>
-                  {comparedZones.map((zone) => (
-                    <strong key={zone.id}>{zone.zoneCode}</strong>
-                  ))}
-                </div>
-                {comparisonRows.map(({ label, values }) => (
-                  <div className="comparison-row" key={label}>
-                    <span>{label}</span>
-                    {values.map((value, index) => (
-                      <p key={`${label}-${comparedZones[index].id}`}>{value}</p>
-                    ))}
-                  </div>
-                ))}
-              </div>
-
-              <div className="comparison-summary">
-                <div className="content-card">
-                  <div className="card-title">
-                    <Sparkles size={16} />
-                    <span>Housing type availability summary</span>
-                  </div>
-                  <p>
-                    {comparedZones.filter((zone) => zone.multiFamilyAllowed).length} of{' '}
-                    {comparedZones.length} compared areas allow multi-family housing, while{' '}
-                    {comparedZones.filter((zone) => zone.additionalUnitAllowed).length} permit an
-                    additional residential unit pathway.
-                  </p>
-                </div>
-                <div className="content-card">
-                  <div className="card-title">
-                    <TriangleAlert size={16} />
-                    <span>Affordability impact indicators</span>
-                  </div>
-                  <div className="indicator-list">
-                    {comparedZones.map((zone) => (
-                      <div className="indicator-row" key={zone.id}>
-                        <strong>{zone.zoneCode}</strong>
-                        <span>{zone.affordabilityImpact} impact</span>
-                        <small>{zone.restrictionScore}/100 restriction score</small>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            </div>
-          ) : (
-            <div className="empty-state empty-state--large">
-              <GitCompareArrows size={20} />
-              <span>Select two or more zones to open the comparison table.</span>
-            </div>
-          )
-        )}
-
-        {bottomPanelOpen && bottomTab === 'analytics' && (
-          <div className="analytics-grid">
-            <div className="content-card">
-              <div className="card-title">
-                <Sparkles size={16} />
-                <span>Restriction scores</span>
-              </div>
-              {visibleZones
-                .slice()
-                .sort((left, right) => left.restrictionScore - right.restrictionScore)
-                .map((zone) => (
-                  <MetricBar
-                    key={zone.id}
-                    label={`${zone.zoneCode} · ${zone.neighborhood}`}
-                    value={zone.restrictionScore}
-                    max={100}
-                    unit=""
-                    color={zoneFill(zone)}
-                  />
-                ))}
-            </div>
-            <div className="content-card">
-              <div className="card-title">
-                <MapPin size={16} />
-                <span>Charted development constraints</span>
-              </div>
-              {visibleZones.slice(0, 4).map((zone) => (
-                <div className="chart-cluster" key={zone.id}>
-                  <strong>{zone.zoneCode}</strong>
-                  <MetricBar
-                    label="Height"
-                    value={zone.maxHeightM}
-                    max={35}
-                    unit="m"
-                    color="#3569d4"
-                  />
-                  <MetricBar
-                    label="Parking"
-                    value={zone.parkingSpacesPerUnit}
-                    max={2}
-                    unit=""
-                    color="#c58a54"
-                  />
-                  <MetricBar
-                    label="Density"
-                    value={zone.densityUnitsPerHectare}
-                    max={360}
-                    unit=""
-                    color="#1d8c76"
-                  />
-                  <MetricBar
-                    label="Front setback"
-                    value={zone.setbacks.front}
-                    max={8}
-                    unit="m"
-                    color="#8a6ce6"
-                  />
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {bottomPanelOpen && bottomTab === 'evidence' && (
-          <div className="evidence-board">
-            <div className="content-card">
-              <div className="card-title">
-                <FileText size={16} />
-                <span>Recent document matches / zoning chunks</span>
-              </div>
-              <div className="evidence-list">
-                {evidenceFeed.map((item) => (
-                  <a
-                    key={item.id}
-                    className="evidence-item"
-                    href={item.url ?? '#'}
-                    target={item.url ? '_blank' : undefined}
-                    rel={item.url ? 'noreferrer' : undefined}
-                  >
-                    <div>
-                      <strong>{item.label}</strong>
-                      <p>{item.excerpt}</p>
-                      <small>{item.citation}</small>
+                <section className="api-section">
+                  <h3 className="h3">RAG insights</h3>
+                  {analyzeData.rag.query && (
+                    <p className="muted small">
+                      <strong>Question:</strong> {analyzeData.rag.query}
+                    </p>
+                  )}
+                  {analyzeData.rag.error && (
+                    <div className="callout callout--warn">
+                      {analyzeData.rag.message ?? analyzeData.rag.error}
                     </div>
-                    {item.url ? <ArrowUpRight size={15} /> : null}
-                  </a>
-                ))}
-              </div>
-            </div>
+                  )}
+                  {analyzeData.rag.answer && (
+                    <div className="rag-answer rag-answer--panel">
+                      <FormattedRagAnswer text={analyzeData.rag.answer} />
+                      {analyzeData.rag.model && (
+                        <p className="muted small">Model: {analyzeData.rag.model}</p>
+                      )}
+                    </div>
+                  )}
+                  {analyzeData.rag.sources && analyzeData.rag.sources.length > 0 && (
+                    <ol className="sources">
+                      {analyzeData.rag.sources.map((s, i) => (
+                        <li key={i}>
+                          <strong>{s.human_label ?? `Passage ${i + 1}`}</strong>
+                          {s.page != null && <> · p.{s.page}</>}
+                          {s.score != null && (
+                            <> · score {typeof s.score === 'number' ? s.score.toFixed(3) : s.score}</>
+                          )}
+                          {s.source_url && (
+                            <div>
+                              <a href={s.source_url} target="_blank" rel="noreferrer">
+                                {s.source_url}
+                              </a>
+                            </div>
+                          )}
+                        </li>
+                      ))}
+                    </ol>
+                  )}
+                </section>
 
-            <div className="content-card">
-              <div className="card-title">
-                <Upload size={16} />
-                <span>Indexed evidence session</span>
-              </div>
-              {uploadResult ? (
-                <div className="session-card">
-                  <strong>{uploadResult.original_filename}</strong>
-                  <p>
-                    {uploadResult.chunks_indexed} vector chunks indexed into{' '}
-                    <code>{uploadResult.collection}</code>.
-                  </p>
-                  <small>Use the area question box to query this document with live RAG.</small>
-                </div>
-              ) : (
-                <div className="empty-state">
-                  <Upload size={18} />
-                  <span>No uploaded evidence yet. Add a PDF in the right panel to test the live pipeline.</span>
-                </div>
-              )}
-            </div>
+                <section className="api-section api-section--row">
+                  <button
+                    type="button"
+                    className="btn btn--primary"
+                    disabled={analyzeLoading || !ragQuestion.trim()}
+                    onClick={() => void runAnalyze(selected.id, ragQuestion)}
+                    title="Uses the question from the sidebar RAG field"
+                  >
+                    {analyzeLoading ? (
+                      <Loader2 size={16} className="spin" />
+                    ) : (
+                      <Sparkles size={16} />
+                    )}
+                    Re-analyze with sidebar question
+                  </button>
+                  <div className="api-copy-btns">
+                    <button
+                      type="button"
+                      className="btn btn--ghost"
+                      onClick={() => void copyAnalyzeJson(true)}
+                    >
+                      <Copy size={16} /> Copy JSON (no geometry)
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn--ghost"
+                      onClick={() => void copyAnalyzeJson(false)}
+                    >
+                      <Copy size={16} /> Copy full JSON
+                    </button>
+                  </div>
+                </section>
+                {copyNote && <p className="ok small">{copyNote}</p>}
+              </>
+            )}
+
+            {!analyzeLoading && !analyzeData && !analyzeError && (
+              <p className="muted">Select a zone on the map; analysis runs automatically.</p>
+            )}
           </div>
-        )}
-      </section>
+        </>
+      )}
     </div>
   )
 }
