@@ -107,3 +107,51 @@ def test_waterloo_template_points_to_arcgis_source_and_default_geojson():
         "https://gis.waterloo.ca/maps/rest/services/Public/Public_Operations/"
         "MapServer/48/query?where=1%3D1&outFields=*&f=geojson&outSR=4326"
     )
+    assert template.required_source_object_id is True
+    assert template.allowed_geometry_types == ("Polygon", "MultiPolygon")
+
+
+def test_normalize_waterloo_skips_non_polygon_and_missing_source_id():
+    template = get_municipality_template("waterloo")
+    result = normalize_zoning_feature_collection(
+        municipality=template,
+        source_url=template.source_url,
+        geojson_url=template.default_geojson_url or "https://example.org/geojson",
+        feature_collection={
+            "type": "FeatureCollection",
+            "features": [
+                {
+                    "type": "Feature",
+                    "properties": {
+                        "ZONING_ID": 1,
+                        "ZONE_CODE": "R1",
+                        "ZONE_LABEL": "Residential",
+                    },
+                    "geometry": {"type": "LineString", "coordinates": []},
+                },
+                {
+                    "type": "Feature",
+                    "properties": {
+                        "ZONE_CODE": "R2",
+                        "ZONE_LABEL": "Residential Two",
+                    },
+                    "geometry": {"type": "Polygon", "coordinates": []},
+                },
+                {
+                    "type": "Feature",
+                    "properties": {
+                        "ZONING_ID": 3,
+                        "ZONE_CODE": "R3",
+                        "ZONE_LABEL": "Residential Three",
+                    },
+                    "geometry": {"type": "MultiPolygon", "coordinates": []},
+                },
+            ],
+        },
+    )
+
+    assert result.total_features == 3
+    assert result.normalized_count == 1
+    assert result.skipped_count == 2
+    assert result.records[0]["sourceObjectId"] == "3"
+    assert result.records[0]["zoneCode"] == "R3"

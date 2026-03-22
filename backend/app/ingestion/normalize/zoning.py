@@ -70,6 +70,17 @@ def normalize_zoning_feature_collection(
             properties,
             municipality.source_id_fields,
         )
+        if municipality.required_source_object_id and (
+            source_object_id is None or not source_object_id.strip()
+        ):
+            skipped_count += 1
+            continue
+        if not _is_allowed_geometry_type(
+            geometry=geometry,
+            allowed_geometry_types=municipality.allowed_geometry_types,
+        ):
+            skipped_count += 1
+            continue
         source_documents = _extract_source_documents(properties)
         records.append(
             {
@@ -137,3 +148,14 @@ def _extract_source_documents(properties: dict[str, Any]) -> list[str]:
         ):
             documents.append(value.strip())
     return documents
+
+
+def _is_allowed_geometry_type(
+    *, geometry: dict[str, Any], allowed_geometry_types: tuple[str, ...]
+) -> bool:
+    if not allowed_geometry_types:
+        return True
+    geometry_type = geometry.get("type")
+    if not isinstance(geometry_type, str):
+        return False
+    return geometry_type in allowed_geometry_types

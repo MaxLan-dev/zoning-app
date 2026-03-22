@@ -17,6 +17,8 @@ class MunicipalityTemplate:
     bylaw_number_fields: tuple[str, ...] = ()
     effective_date_fields: tuple[str, ...] = ()
     source_id_fields: tuple[str, ...] = ()
+    required_source_object_id: bool = False
+    allowed_geometry_types: tuple[str, ...] = ()
 
 
 _TEMPLATES: dict[str, MunicipalityTemplate] = {
@@ -62,6 +64,8 @@ _TEMPLATES: dict[str, MunicipalityTemplate] = {
         bylaw_number_fields=("BYLAW_NO", "BYLAW"),
         effective_date_fields=("EFFECTIVE_DATE",),
         source_id_fields=("ZONING_ID", "OBJECTID", "id"),
+        required_source_object_id=True,
+        allowed_geometry_types=("Polygon", "MultiPolygon"),
     ),
 }
 
