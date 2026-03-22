@@ -4,13 +4,14 @@ import { GeoJSON, MapContainer, TileLayer, useMap, ZoomControl } from 'react-lea
 import type { Feature, FeatureCollection, GeoJsonObject } from 'geojson'
 import {
   AlertCircle,
+  Braces,
   Building2,
+  Copy,
   ExternalLink,
   Loader2,
   MapPin,
   RefreshCw,
   Sparkles,
-  Upload,
 } from 'lucide-react'
 import 'leaflet/dist/leaflet.css'
 import './App.css'
@@ -30,6 +31,7 @@ const API = {
     `/api/v1/zones/at-point?lat=${lat}&lng=${lng}&${REGION_QS}`,
   zone: (id: number) => `/api/v1/zones/${id}`,
   zoneIngestDocs: (id: number) => `/api/v1/zones/${id}/ingest-documents`,
+  zoneAnalyze: (id: number) => `/api/v1/zones/${id}/analyze`,
   rag: '/api/v1/rag',
   documentsUpload: '/api/v1/documents/upload',
 } as const
@@ -103,6 +105,35 @@ type IngestResultRow = {
   chunks_indexed?: number
 }
 
+type ZoneRecordDetail = ZoneMatch & {
+  geometry?: unknown
+}
+
+type AnalyzeResponse = {
+  zoneId: number
+  record: ZoneRecordDetail
+  ingest: { results: IngestResultRow[] }
+  rag: RagRes & { query?: string }
+}
+
+function geometrySummary(geometry: unknown): string {
+  if (geometry == null) return '—'
+  if (typeof geometry !== 'object' || geometry === null) return 'present'
+  const t = (geometry as { type?: string }).type
+  return t ?? 'GeoJSON'
+}
+
+function redactAnalyzeForClipboard(data: AnalyzeResponse): AnalyzeResponse {
+  const record = { ...data.record }
+  if (record.geometry != null) {
+    record.geometry = {
+      _redacted: true,
+      geojsonType: geometrySummary(record.geometry),
+    }
+  }
+  return { ...data, record }
+}
+
 function geoJsonStyle(feature?: Feature): L.PathOptions {
   const m = (feature?.properties as { municipality?: string } | undefined)?.municipality
   const kitchener = m === 'kitchener'
@@ -136,9 +167,11 @@ export default function App() {
   const [matchPick, setMatchPick] = useState(0)
   const [clickLabel, setClickLabel] = useState<string | null>(null)
 
-  const [ingestLoading, setIngestLoading] = useState(false)
-  const [ingestRows, setIngestRows] = useState<IngestResultRow[] | null>(null)
-  const [ingestError, setIngestError] = useState<string | null>(null)
+  const [analyzeLoading, setAnalyzeLoading] = useState(false)
+  const [analyzeError, setAnalyzeError] = useState<string | null>(null)
+  const [analyzeData, setAnalyzeData] = useState<AnalyzeResponse | null>(null)
+  const [showApiPanel, setShowApiPanel] = useState(false)
+  const [copyNote, setCopyNote] = useState<string | null>(null)
 
   const [ragQuestion, setRagQuestion] = useState(
     'What uses are permitted in this zone, and what should I read first?',
@@ -209,8 +242,6 @@ export default function App() {
   const runAtPoint = useCallback(async (lat: number, lng: number) => {
     setAtPointLoading(true)
     setAtPointError(null)
-    setIngestRows(null)
-    setIngestError(null)
     setClickLabel(`${lat.toFixed(5)}, ${lng.toFixed(5)}`)
     try {
       const res = await fetch(API.zonesAtPoint(lat, lng))
@@ -232,36 +263,88 @@ export default function App() {
     }
   }, [])
 
-  const runIngest = useCallback(async () => {
-    if (!selected) return
-    setIngestLoading(true)
-    setIngestError(null)
-    setIngestRows(null)
+  const runAnalyze = useCallback(async (zoneId: number, customQ?: string) => {
+    setAnalyzeLoading(true)
+    setAnalyzeError(null)
     try {
-      const res = await fetch(API.zoneIngestDocs(selected.id), { method: 'POST' })
-      const data = (await res.json()) as {
-        results?: IngestResultRow[]
+      const res = await fetch(API.zoneAnalyze(zoneId), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(
+          customQ !== undefined && customQ.trim() ? { q: customQ.trim() } : {},
+        ),
+      })
+      const data = (await res.json()) as AnalyzeResponse & {
         error?: string
         message?: string
       }
       if (!res.ok) {
-        setIngestError(data.message ?? data.error ?? `HTTP ${res.status}`)
+        setAnalyzeError(data.message ?? data.error ?? `HTTP ${res.status}`)
+        setAnalyzeData(null)
         return
       }
-      setIngestRows(data.results ?? [])
+      setAnalyzeData(data)
+      const rag = data.rag
+      setRagError(null)
+      if (rag.error) {
+        setRagData(null)
+        setRagError(rag.message ?? String(rag.error))
+      } else {
+        setRagData({
+          query: rag.query,
+          answer: rag.answer,
+          sources: rag.sources,
+          model: rag.model,
+        })
+      }
     } catch {
-      setIngestError('Ingest request failed.')
+      setAnalyzeError('Analyze failed (network).')
+      setAnalyzeData(null)
     } finally {
-      setIngestLoading(false)
+      setAnalyzeLoading(false)
     }
-  }, [selected])
+  }, [])
+
+  useEffect(() => {
+    if (!selected?.id) {
+      setAnalyzeData(null)
+      setAnalyzeError(null)
+      setAnalyzeLoading(false)
+      setRagData(null)
+      setRagError(null)
+      return
+    }
+    void runAnalyze(selected.id)
+  }, [selected?.id, runAnalyze])
+
+  useEffect(() => {
+    if (!showApiPanel) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setShowApiPanel(false)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [showApiPanel])
+
+  const copyAnalyzeJson = useCallback(async (redactGeometry: boolean) => {
+    if (!analyzeData) return
+    setCopyNote(null)
+    try {
+      const payload = redactGeometry ? redactAnalyzeForClipboard(analyzeData) : analyzeData
+      await navigator.clipboard.writeText(JSON.stringify(payload, null, 2))
+      setCopyNote(redactGeometry ? 'Copied JSON (geometry redacted).' : 'Copied full JSON.')
+      window.setTimeout(() => setCopyNote(null), 2500)
+    } catch {
+      setCopyNote('Clipboard not available.')
+      window.setTimeout(() => setCopyNote(null), 2500)
+    }
+  }, [analyzeData])
 
   const runRag = useCallback(async () => {
     const q = ragQuestion.trim()
     if (!q) return
     setRagLoading(true)
     setRagError(null)
-    setRagData(null)
     try {
       const body: Record<string, unknown> = { q, limit: 8 }
       if (uploadResult?.document_id) body.document_id = uploadResult.document_id
@@ -337,6 +420,16 @@ export default function App() {
           <button type="button" className="btn btn--ghost" onClick={() => void loadGeojson()}>
             <RefreshCw size={16} className={geoLoading ? 'spin' : ''} />
             Reload map
+          </button>
+          <button
+            type="button"
+            className="btn btn--ghost"
+            disabled={!selected}
+            onClick={() => setShowApiPanel(true)}
+            title="Formatted API record, ingest status, RAG, and raw JSON"
+          >
+            <Braces size={16} />
+            API data
           </button>
         </div>
       </header>
@@ -496,37 +589,32 @@ export default function App() {
               ) : (
                 <p className="muted">No sourceDocuments on this record.</p>
               )}
-              <button
-                type="button"
-                className="btn btn--primary"
-                disabled={ingestLoading}
-                onClick={() => void runIngest()}
-              >
-                {ingestLoading ? (
-                  <Loader2 size={16} className="spin" />
-                ) : (
-                  <Upload size={16} />
-                )}
-                POST {API.zoneIngestDocs(selected.id).replace(/^https?:\/\/[^/]+/, '')}
-              </button>
-              {ingestError && <p className="err">{ingestError}</p>}
-              {ingestRows && (
+              <p className="muted small">
+                Linked PDFs are sent to the vector index automatically via{' '}
+                <code className="inline-code">POST …/analyze</code> when you select this zone
+                (no extra click).
+              </p>
+              {analyzeLoading && (
+                <p className="muted small">
+                  <Loader2 size={14} className="spin" /> Indexing PDFs and running RAG…
+                </p>
+              )}
+              {analyzeError && <p className="err small">{analyzeError}</p>}
+              {analyzeData?.ingest?.results && analyzeData.ingest.results.length > 0 && (
                 <ul className="ingest-list">
-                  {ingestRows.map((row, i) => (
+                  {analyzeData.ingest.results.map((row, i) => (
                     <li key={i}>
                       <span className={`tag tag--${row.status ?? 'unknown'}`}>
                         {row.status ?? '?'}
                       </span>{' '}
                       {row.source_url && (
-                        <span className="muted small">{row.source_url.slice(0, 48)}…</span>
+                        <span className="muted small">{row.source_url.slice(0, 40)}…</span>
                       )}
                       {row.document_id && (
                         <div>
                           <code className="inline-code">{row.document_id}</code>
                         </div>
                       )}
-                      {row.message && <div className="small">{row.message}</div>}
-                      {row.error && <div className="err small">{row.error}</div>}
                     </li>
                   ))}
                 </ul>
@@ -536,12 +624,10 @@ export default function App() {
 
           <hr className="sep" />
 
-          <h2 className="h2">RAG</h2>
+          <h2 className="h2">Follow-up (RAG)</h2>
           <p className="muted small">
-            <code>POST {API.rag}</code>
-            {selected
-              ? ` — filtered by municipality, zone_code, source_object_id`
-              : ' — no zone filter until you click the map'}
+            Default insights come from <code>POST …/analyze</code>. Ask another question with{' '}
+            <code>POST {API.rag}</code> (same zone filters).
           </p>
           <textarea
             className="textarea"
@@ -613,6 +699,236 @@ export default function App() {
           )}
         </aside>
       </div>
+
+      {showApiPanel && selected && (
+        <>
+          <div
+            className="api-backdrop"
+            role="presentation"
+            aria-hidden
+            onClick={() => setShowApiPanel(false)}
+          />
+          <div
+            className="api-drawer"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="api-drawer-title"
+          >
+            <div className="api-drawer__head">
+              <h2 id="api-drawer-title" className="h2">
+                API data · {selected.municipality} · {selected.zoneCode}
+              </h2>
+              <button
+                type="button"
+                className="btn btn--ghost"
+                onClick={() => setShowApiPanel(false)}
+              >
+                Close
+              </button>
+            </div>
+
+            <p className="muted small">
+              <a href={API.zone(selected.id)} target="_blank" rel="noreferrer">
+                GET {API.zone(selected.id)} <ExternalLink size={12} />
+              </a>
+              {' · '}
+              <code className="inline-code">POST {API.zoneAnalyze(selected.id)}</code> ingests linked
+              PDFs and runs RAG automatically.
+            </p>
+
+            {analyzeLoading && (
+              <p className="muted">
+                <Loader2 size={16} className="spin" /> Loading record, indexing PDFs, running RAG…
+              </p>
+            )}
+            {analyzeError && <p className="err">{analyzeError}</p>}
+
+            {analyzeData && (
+              <>
+                <section className="api-section">
+                  <h3 className="h3">Zone record</h3>
+                  <dl className="kv">
+                    <dt>Municipality</dt>
+                    <dd>{analyzeData.record.municipality}</dd>
+                    <dt>Zone code</dt>
+                    <dd>{analyzeData.record.zoneCode}</dd>
+                    {analyzeData.record.zoneType != null && analyzeData.record.zoneType !== '' && (
+                      <>
+                        <dt>Zone type</dt>
+                        <dd>{analyzeData.record.zoneType}</dd>
+                      </>
+                    )}
+                    {analyzeData.record.zoneName != null && analyzeData.record.zoneName !== '' && (
+                      <>
+                        <dt>Zone name</dt>
+                        <dd>{analyzeData.record.zoneName}</dd>
+                      </>
+                    )}
+                    {analyzeData.record.status != null && analyzeData.record.status !== '' && (
+                      <>
+                        <dt>Status</dt>
+                        <dd>{analyzeData.record.status}</dd>
+                      </>
+                    )}
+                    {analyzeData.record.bylawNumber != null &&
+                      analyzeData.record.bylawNumber !== '' && (
+                        <>
+                          <dt>Bylaw</dt>
+                          <dd>{analyzeData.record.bylawNumber}</dd>
+                        </>
+                      )}
+                    {analyzeData.record.effectiveDate != null &&
+                      analyzeData.record.effectiveDate !== '' && (
+                        <>
+                          <dt>Effective</dt>
+                          <dd>{analyzeData.record.effectiveDate}</dd>
+                        </>
+                      )}
+                    <dt>Source object</dt>
+                    <dd>
+                      <code className="inline-code">{analyzeData.record.sourceObjectId}</code>
+                    </dd>
+                    <dt>Geometry</dt>
+                    <dd className="muted">{geometrySummary(analyzeData.record.geometry)}</dd>
+                    <dt>Source URLs</dt>
+                    <dd>
+                      {analyzeData.record.sourceDocuments?.length ? (
+                        <ul className="link-list">
+                          {analyzeData.record.sourceDocuments.map((u) => (
+                            <li key={u}>
+                              <a href={u} target="_blank" rel="noreferrer">
+                                {u}
+                              </a>
+                            </li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <span className="muted">—</span>
+                      )}
+                    </dd>
+                  </dl>
+                </section>
+
+                <section className="api-section">
+                  <h3 className="h3">PDF ingest</h3>
+                  {analyzeData.ingest.results.length === 0 ? (
+                    <p className="muted">No ingest rows returned.</p>
+                  ) : (
+                    <ul className="ingest-list ingest-list--compact">
+                      {analyzeData.ingest.results.map((row, i) => (
+                        <li key={i}>
+                          <span className={`tag tag--${row.status ?? 'unknown'}`}>
+                            {row.status ?? '?'}
+                          </span>{' '}
+                          {row.source_url && (
+                            <a href={row.source_url} target="_blank" rel="noreferrer" className="small">
+                              {row.source_url}
+                            </a>
+                          )}
+                          {row.document_id && (
+                            <div>
+                              <code className="inline-code">{row.document_id}</code>
+                            </div>
+                          )}
+                          {row.message && <div className="small muted">{row.message}</div>}
+                          {row.error && <div className="err small">{row.error}</div>}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </section>
+
+                <section className="api-section">
+                  <h3 className="h3">RAG insights</h3>
+                  {analyzeData.rag.query && (
+                    <p className="muted small">
+                      <strong>Question:</strong> {analyzeData.rag.query}
+                    </p>
+                  )}
+                  {analyzeData.rag.error || analyzeData.rag.message ? (
+                    <p className="err">
+                      {analyzeData.rag.message ?? analyzeData.rag.error}
+                      {!analyzeData.rag.answer && (
+                        <span className="muted small">
+                          {' '}
+                          (Set <code className="inline-code">GROQ_API_KEY</code> on the server for
+                          answers.)
+                        </span>
+                      )}
+                    </p>
+                  ) : null}
+                  {analyzeData.rag.answer && (
+                    <div className="rag-answer rag-answer--panel">
+                      <p>{analyzeData.rag.answer}</p>
+                      {analyzeData.rag.model && (
+                        <p className="muted small">Model: {analyzeData.rag.model}</p>
+                      )}
+                    </div>
+                  )}
+                  {analyzeData.rag.sources && analyzeData.rag.sources.length > 0 && (
+                    <ol className="sources">
+                      {analyzeData.rag.sources.map((s, i) => (
+                        <li key={i}>
+                          <strong>{s.human_label ?? `Passage ${i + 1}`}</strong>
+                          {s.page != null && <> · p.{s.page}</>}
+                          {s.score != null && (
+                            <> · score {typeof s.score === 'number' ? s.score.toFixed(3) : s.score}</>
+                          )}
+                          {s.source_url && (
+                            <div>
+                              <a href={s.source_url} target="_blank" rel="noreferrer">
+                                {s.source_url}
+                              </a>
+                            </div>
+                          )}
+                        </li>
+                      ))}
+                    </ol>
+                  )}
+                </section>
+
+                <section className="api-section api-section--row">
+                  <button
+                    type="button"
+                    className="btn btn--primary"
+                    disabled={analyzeLoading || !ragQuestion.trim()}
+                    onClick={() => void runAnalyze(selected.id, ragQuestion)}
+                    title="Uses the question from the sidebar RAG field"
+                  >
+                    {analyzeLoading ? (
+                      <Loader2 size={16} className="spin" />
+                    ) : (
+                      <Sparkles size={16} />
+                    )}
+                    Re-analyze with sidebar question
+                  </button>
+                  <div className="api-copy-btns">
+                    <button
+                      type="button"
+                      className="btn btn--ghost"
+                      onClick={() => void copyAnalyzeJson(true)}
+                    >
+                      <Copy size={16} /> Copy JSON (no geometry)
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn--ghost"
+                      onClick={() => void copyAnalyzeJson(false)}
+                    >
+                      <Copy size={16} /> Copy full JSON
+                    </button>
+                  </div>
+                </section>
+                {copyNote && <p className="ok small">{copyNote}</p>}
+              </>
+            )}
+
+            {!analyzeLoading && !analyzeData && !analyzeError && (
+              <p className="muted">Select a zone on the map; analysis runs automatically.</p>
+            )}
+          </div>
+        </>
+      )}
     </div>
   )
 }

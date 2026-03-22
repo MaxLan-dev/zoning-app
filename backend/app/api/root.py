@@ -17,6 +17,7 @@ def index():
                 "zones_region_summary": "GET /api/v1/zones/region-summary?region=waterloo-kitchener",
                 "zones_at_point": "GET /api/v1/zones/at-point?lat=&lng= (defaults region waterloo+kitchener)",
                 "zone_ingest_docs": "POST /api/v1/zones/<id>/ingest-documents",
+                "zone_analyze": "POST /api/v1/zones/<id>/analyze",
                 "rag": "POST /api/v1/rag",
             },
         }

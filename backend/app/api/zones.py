@@ -209,6 +209,83 @@ def ingest_zone_documents(zone_id: int):
     return jsonify({"zoneId": zone_id, "results": results}), 200
 
 
+DEFAULT_ZONE_ANALYZE_QUERY = (
+    "For this zoning district, summarize in clear language: "
+    "(1) What housing or building uses appear permitted, prohibited, or conditional based on the bylaws? "
+    "(2) What do the excerpts say about height, density, setbacks, lot size, or parking if anything? "
+    "(3) What should a builder, planner, or advocate verify next (approvals, maps, other bylaw sections)? "
+    "Use ONLY the retrieved context. If it is insufficient, say so and do not invent numbers or rules."
+)
+
+
+@bp.post("/<int:zone_id>/analyze")
+def zone_analyze(zone_id: int):
+    """
+    Ingest linked PDFs for the zone into Qdrant, then run RAG with a default or custom question.
+    Returns structured record + ingest results + RAG payload (or RAG error if Groq is not configured).
+    """
+    from app.services.rag import run_rag
+
+    body = request.get_json(silent=True) or {}
+    raw_q = body.get("q")
+    if isinstance(raw_q, str) and raw_q.strip():
+        question = raw_q.strip()
+    else:
+        question = DEFAULT_ZONE_ANALYZE_QUERY
+
+    r = ZoningRecord.query.get(zone_id)
+    if r is None:
+        return jsonify({"error": "not_found"}), 404
+
+    app = current_app._get_current_object()
+    try:
+        ingest_results = ingest_documents_for_zone(app, r)
+    except Exception as exc:
+        return jsonify({"error": "ingest_failed", "message": str(exc)}), 502
+
+    record_detail = _serialize_zone_detail(r)
+    rag_out: dict[str, object] = {
+        "query": question,
+        "answer": None,
+        "sources": [],
+        "model": None,
+        "error": None,
+        "message": None,
+    }
+
+    if not app.config.get("GROQ_API_KEY"):
+        rag_out["error"] = "groq_not_configured"
+        rag_out["message"] = "Set GROQ_API_KEY in the environment for RAG answers."
+    else:
+        try:
+            result = run_rag(
+                app,
+                question,
+                limit=10,
+                municipality=r.municipality,
+                zone_code=r.zone_code,
+                source_object_id=r.source_object_id,
+            )
+            rag_out["answer"] = result.get("answer")
+            rag_out["sources"] = result.get("sources") or []
+            rag_out["model"] = result.get("model")
+        except ValueError as exc:
+            rag_out["error"] = "configuration_error"
+            rag_out["message"] = str(exc)
+        except Exception as exc:
+            rag_out["error"] = "rag_failed"
+            rag_out["message"] = str(exc)
+
+    return jsonify(
+        {
+            "zoneId": zone_id,
+            "record": record_detail,
+            "ingest": {"results": ingest_results},
+            "rag": rag_out,
+        }
+    ), 200
+
+
 def _serialize_zone(record: ZoningRecord) -> dict[str, object]:
     return {
         "id": record.id,

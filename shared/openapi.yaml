@@ -40,6 +40,36 @@ paths:
     get:
       summary: Zones at lat/lng — defaults to waterloo+kitchener if municipality omitted
       operationId: getZonesAtPoint
+  /api/v1/zones/{zone_id}:
+    get:
+      summary: Single zone record (GeoJSON geometry when available)
+      operationId: getZoneById
+      parameters:
+        - name: zone_id
+          in: path
+          required: true
+          schema:
+            type: integer
+  /api/v1/zones/{zone_id}/analyze:
+    post:
+      summary: Ingest linked PDFs for the zone, then run RAG (default or custom question in body)
+      operationId: postZoneAnalyze
+      parameters:
+        - name: zone_id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                q:
+                  type: string
+                  description: Optional RAG question; omit for server default prompt
   /api/v1/documents/ingest-url:
     post:
       summary: Download PDF from URL and upsert vectors into Qdrant

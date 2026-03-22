@@ -107,6 +107,43 @@ def test_region_summary_requires_scope(client):
     assert res.status_code == 400
 
 
+def test_zone_analyze_not_found(client):
+    res = client.post("/api/v1/zones/999999/analyze", json={})
+    assert res.status_code == 404
+
+
+def test_zone_analyze_returns_record_and_ingest(client, app, monkeypatch):
+    with app.app_context():
+        zid = _add_zone_square(
+            municipality="waterloo",
+            zone_code="Z9",
+            source_object_id="z9",
+        )
+
+    monkeypatch.setattr(
+        "app.api.zones.ingest_documents_for_zone",
+        lambda _app, _rec: [{"status": "skipped", "source_url": "https://x/y.pdf"}],
+    )
+    monkeypatch.setattr(
+        "app.services.rag.run_rag",
+        lambda *_a, **_kw: {
+            "answer": "Test answer.",
+            "sources": [],
+            "model": "test-model",
+        },
+    )
+
+    app.config["GROQ_API_KEY"] = "test-key"
+
+    res = client.post(f"/api/v1/zones/{zid}/analyze", json={})
+    assert res.status_code == 200
+    data = res.get_json()
+    assert data["zoneId"] == zid
+    assert data["record"]["zoneCode"] == "Z9"
+    assert data["ingest"]["results"][0]["status"] == "skipped"
+    assert data["rag"]["answer"] == "Test answer."
+
+
 def test_region_summary_counts(client, app):
     with app.app_context():
         _add_zone_square(municipality="waterloo", zone_code="W1", source_object_id="w1")
