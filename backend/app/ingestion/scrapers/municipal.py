@@ -118,10 +118,18 @@ class MunicipalWebScraper:
     ) -> list[str]:
         response = self._client.get(url)
         response.raise_for_status()
+        resolved_url = str(response.url)
+        metadata_candidates = self._derive_arcgis_query_urls(
+            service_url=resolved_url,
+            payload=_try_parse_json(response),
+            allowed_domains=allowed_domains,
+        )
+        if metadata_candidates:
+            return metadata_candidates
         soup = BeautifulSoup(response.text, "html.parser")
         return self._extract_geojson_candidates(
             soup=soup,
-            base_url=str(response.url),
+            base_url=resolved_url,
             allowed_domains=allowed_domains,
         )
 
@@ -146,30 +154,38 @@ class MunicipalWebScraper:
         if not candidate_urls:
             raise ValueError("No GeoJSON URLs were discovered for the provided source URL")
 
+        attempted_urls: set[str] = set()
         for candidate_url in candidate_urls:
-            if not candidate_url:
-                continue
-            parsed = urlparse(candidate_url)
-            if allowed_domains and parsed.netloc.lower() not in allowed_domains:
-                continue
+            expanded_urls = self._expand_geojson_candidates(
+                candidate_url,
+                allowed_domains=allowed_domains,
+            )
+            for expanded_url in expanded_urls:
+                if expanded_url in attempted_urls:
+                    continue
+                attempted_urls.add(expanded_url)
 
-            try:
-                payload = self._fetch_geojson_payload(
-                    candidate_url,
-                    paginate=paginate,
-                    page_size=page_size,
-                    max_pages=max_pages,
-                )
-            except (httpx.HTTPError, ValueError):
-                continue
+                parsed = urlparse(expanded_url)
+                if allowed_domains and parsed.netloc.lower() not in allowed_domains:
+                    continue
 
-            feature_collection = _coerce_feature_collection(payload)
-            if feature_collection is not None:
-                return GeoJSONResult(
-                    source_url=source_url,
-                    geojson_url=candidate_url,
-                    feature_collection=feature_collection,
-                )
+                try:
+                    payload = self._fetch_geojson_payload(
+                        expanded_url,
+                        paginate=paginate,
+                        page_size=page_size,
+                        max_pages=max_pages,
+                    )
+                except (httpx.HTTPError, ValueError):
+                    continue
+
+                feature_collection = _coerce_feature_collection(payload)
+                if feature_collection is not None:
+                    return GeoJSONResult(
+                        source_url=source_url,
+                        geojson_url=expanded_url,
+                        feature_collection=feature_collection,
+                    )
 
         raise ValueError("No valid GeoJSON FeatureCollection payload was found")
 
@@ -269,6 +285,29 @@ class MunicipalWebScraper:
         response.raise_for_status()
         return response.json()
 
+    def _expand_geojson_candidates(
+        self,
+        url: str,
+        *,
+        allowed_domains: set[str] | None,
+    ) -> list[str]:
+        parsed = urlparse(url)
+        if allowed_domains and parsed.netloc.lower() not in allowed_domains:
+            return []
+        if _looks_like_arcgis_query_url(url):
+            return [url]
+        if not _looks_like_arcgis_metadata_url(url):
+            return [url]
+        payload = self._fetch_json(url)
+        derived = self._derive_arcgis_query_urls(
+            service_url=url,
+            payload=payload,
+            allowed_domains=allowed_domains,
+        )
+        if derived:
+            return derived
+        return [url]
+
     def _fetch_geojson_payload(
         self,
         url: str,
@@ -346,6 +385,77 @@ class MunicipalWebScraper:
             **(base_collection or {"type": "FeatureCollection"}),
             "features": features,
         }
+
+    @staticmethod
+    def _derive_arcgis_query_urls(
+        *,
+        service_url: str,
+        payload: object,
+        allowed_domains: set[str] | None,
+    ) -> list[str]:
+        if not _looks_like_arcgis_metadata_url(service_url):
+            return []
+        if not isinstance(payload, dict):
+            return []
+
+        parsed = urlparse(service_url)
+        if allowed_domains and parsed.netloc.lower() not in allowed_domains:
+            return []
+
+        service_base_url = urlunparse(
+            (parsed.scheme, parsed.netloc, parsed.path.rstrip("/"), "", "", "")
+        )
+        service_root_url = service_base_url
+        parsed_layer_id = _extract_arcgis_layer_id(parsed.path)
+        if parsed_layer_id is not None:
+            service_root_url = re.sub(r"/\d+$", "", service_base_url)
+        scored: list[tuple[int, str]] = []
+        seen: set[str] = set()
+
+        layer_id = parsed_layer_id
+        if layer_id is not None and payload.get("geometryType") == "esriGeometryPolygon":
+            query_url = _build_arcgis_query_url(
+                service_base_url=service_root_url,
+                layer_id=layer_id,
+            )
+            if query_url not in seen:
+                seen.add(query_url)
+                scored.append((50, query_url))
+
+        layers = payload.get("layers")
+        if isinstance(layers, list):
+            for layer in layers:
+                if not isinstance(layer, dict):
+                    continue
+                if layer.get("geometryType") != "esriGeometryPolygon":
+                    continue
+                if "feature" not in str(layer.get("type", "")).lower():
+                    continue
+
+                layer_id_value = layer.get("id")
+                if not isinstance(layer_id_value, int):
+                    continue
+
+                name = str(layer.get("name", "")).lower()
+                score = 0
+                if "zoning" in name or "zone" in name:
+                    score += 10
+                if "in force" in name or "effect" in name:
+                    score += 5
+                if "proposed" in name:
+                    score -= 5
+
+                query_url = _build_arcgis_query_url(
+                    service_base_url=service_root_url,
+                    layer_id=layer_id_value,
+                )
+                if query_url in seen:
+                    continue
+                seen.add(query_url)
+                scored.append((score, query_url))
+
+        scored.sort(key=lambda item: item[0], reverse=True)
+        return [url for _score, url in scored]
 
 
 def scrape_municipal_page(
@@ -468,3 +578,36 @@ def _coerce_non_negative_int(value: str | None) -> int | None:
     if parsed < 0:
         return None
     return parsed
+
+
+def _try_parse_json(response: httpx.Response) -> object | None:
+    try:
+        return response.json()
+    except ValueError:
+        return None
+
+
+def _looks_like_arcgis_metadata_url(url: str) -> bool:
+    parsed = urlparse(url)
+    path = parsed.path.lower()
+    if "/query" in path:
+        return False
+    if "/mapserver" not in path and "/featureserver" not in path:
+        return False
+    params = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    response_format = params.get("f", "").lower()
+    return response_format in {"json", "pjson"}
+
+
+def _extract_arcgis_layer_id(path: str) -> int | None:
+    match = re.search(r"/(?:mapserver|featureserver)/(\d+)$", path.lower())
+    if match is None:
+        return None
+    return int(match.group(1))
+
+
+def _build_arcgis_query_url(*, service_base_url: str, layer_id: int) -> str:
+    return (
+        f"{service_base_url}/{layer_id}/query"
+        "?where=1%3D1&outFields=*&f=geojson&outSR=4326"
+    )
