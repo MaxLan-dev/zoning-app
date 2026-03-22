@@ -28,3 +28,19 @@ paths:
                   service:
                     type: string
                     example: zoning-api
+  /api/v1/zones/geojson:
+    get:
+      summary: Zoning polygons — use region=waterloo-kitchener or municipality / municipalities
+      operationId: getZonesGeojson
+  /api/v1/zones/at-point:
+    get:
+      summary: Zones at lat/lng — defaults to waterloo+kitchener if municipality omitted
+      operationId: getZonesAtPoint
+  /api/v1/documents/ingest-url:
+    post:
+      summary: Download PDF from URL and upsert vectors into Qdrant
+      operationId: postIngestPdfUrl
+  /api/v1/rag:
+    post:
+      summary: RAG with optional municipality, zone_code, source_object_id filters
+      operationId: postRag

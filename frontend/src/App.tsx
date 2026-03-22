@@ -32,7 +32,14 @@ import {
   type ZoneRecord,
 } from './mockData'
 
-type Health = { status: string; service: string }
+/** Map pan limit: City of Kitchener + City of Waterloo area (WGS84). */
+const WK_MAX_BOUNDS = L.latLngBounds([43.37, -80.65], [43.58, -80.32])
+const WK_CENTER: L.LatLngTuple = [43.475, -80.485]
+const WK_INITIAL_ZOOM = 11
+
+const GEOJSON_URL = '/api/v1/zones/geojson?region=waterloo-kitchener'
+const AT_POINT_URL = (lat: number, lng: number) =>
+  `/api/v1/zones/at-point?lat=${lat}&lng=${lng}&region=waterloo-kitchener`
 
 type UploadResult = {
   document_id: string
@@ -402,6 +409,11 @@ function App() {
     'waterloo-uptown-rmu-20',
   )
 
+  const [mapReady, setMapReady] = useState(false)
+  const [mapStatus, setMapStatus] = useState<string | null>(null)
+  const [zonePick, setZonePick] = useState<ZonePick | null>(null)
+  const [ingestStatus, setIngestStatus] = useState<string | null>(null)
+
   useEffect(() => {
     async function loadApiState() {
       setHealthLoading(true)
@@ -646,6 +658,16 @@ function App() {
     pushRecentQuery(question)
 
     try {
+      const body: Record<string, unknown> = {
+        q: ragQuery.trim(),
+        limit: 8,
+      }
+      if (uploadResult?.document_id) body.document_id = uploadResult.document_id
+      if (zonePick) {
+        body.municipality = zonePick.municipality
+        body.zone_code = zonePick.zoneCode
+        body.source_object_id = zonePick.sourceObjectId
+      }
       const res = await fetch('/api/v1/rag', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

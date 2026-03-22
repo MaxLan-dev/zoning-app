@@ -15,6 +15,9 @@ def semantic_search(
     *,
     limit: int = 5,
     document_id: str | None = None,
+    municipality: str | None = None,
+    zone_code: str | None = None,
+    source_object_id: str | None = None,
 ) -> list[dict[str, Any]]:
     model = _get_sentence_model(app.config["EMBEDDING_MODEL"])
     encoded = model.encode(query, show_progress_bar=False)
@@ -32,18 +35,38 @@ def semantic_search(
     )
     collection = app.config["QDRANT_COLLECTION"]
 
-    query_filter = None
+    must: list[FieldCondition] = []
     if document_id:
-        query_filter = Filter(
-            must=[
-                FieldCondition(
-                    key="document_id",
-                    match=MatchValue(value=document_id),
-                )
-            ]
+        must.append(
+            FieldCondition(
+                key="document_id",
+                match=MatchValue(value=document_id),
+            )
+        )
+    if municipality:
+        must.append(
+            FieldCondition(
+                key="municipality",
+                match=MatchValue(value=municipality.strip().lower()),
+            )
+        )
+    if zone_code:
+        must.append(
+            FieldCondition(
+                key="zone_code",
+                match=MatchValue(value=zone_code.strip()),
+            )
+        )
+    if source_object_id:
+        must.append(
+            FieldCondition(
+                key="source_object_id",
+                match=MatchValue(value=source_object_id.strip()),
+            )
         )
 
-    # qdrant-client >=1.16 removed .search(); use query_points (dense vector query).
+    query_filter = Filter(must=must) if must else None
+
     response = client.query_points(
         collection_name=collection,
         query=query_vector,

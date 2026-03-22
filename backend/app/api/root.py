@@ -12,6 +12,10 @@ def index():
             "endpoints": {
                 "health": "/api/v1/health",
                 "upload_pdf": "POST /api/v1/documents/upload",
+                "ingest_pdf_url": "POST /api/v1/documents/ingest-url",
+                "zones_geojson": "GET /api/v1/zones/geojson?region=waterloo-kitchener",
+                "zones_at_point": "GET /api/v1/zones/at-point?lat=&lng= (defaults region waterloo+kitchener)",
+                "zone_ingest_docs": "POST /api/v1/zones/<id>/ingest-documents",
                 "rag": "POST /api/v1/rag",
             },
         }
