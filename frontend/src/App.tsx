@@ -144,6 +144,20 @@ function redactAnalyzeForClipboard(data: AnalyzeResponse): AnalyzeResponse {
   return { ...data, record }
 }
 
+function titleCaseMunicipality(value: string) {
+  return value.charAt(0).toUpperCase() + value.slice(1)
+}
+
+function formatRagError(message: string) {
+  if (message.includes('Index required but not found')) {
+    return 'Zone-scoped evidence filters were not ready in the vector index yet. Retry now that the backend has created the needed indexes, or ingest linked PDFs for this zone first.'
+  }
+  if (message.includes('groq_not_configured')) {
+    return 'RAG is not configured yet. Add `GROQ_API_KEY` in the repo-root `.env` file and restart the backend.'
+  }
+  return message
+}
+
 function FormattedRagAnswer({ text }: { text: string }) {
   const paragraphs = text
     .split(/\n{2,}/)
@@ -232,6 +246,20 @@ export default function App() {
   const [uploadError, setUploadError] = useState<string | null>(null)
 
   const selected = matches[matchPick] ?? null
+  const promptChips = useMemo(() => {
+    if (!selected) {
+      return [
+        'What does this zoning area allow?',
+        'What should I read first in this bylaw?',
+        'Which PDFs are linked to this zone?',
+      ]
+    }
+    return [
+      `What uses are permitted in ${selected.zoneCode}?`,
+      `Summarize the main constraints for ${selected.zoneCode}.`,
+      `What should I read first for ${selected.zoneCode}?`,
+    ]
+  }, [selected])
 
   const geoBounds = useMemo(() => {
     if (!geojson?.features?.length) return null
@@ -408,7 +436,7 @@ export default function App() {
       })
       const data = (await res.json()) as RagRes
       if (!res.ok) {
-        setRagError(data.message ?? data.error ?? `HTTP ${res.status}`)
+        setRagError(formatRagError(data.message ?? data.error ?? `HTTP ${res.status}`))
         return
       }
       setRagData(data)
@@ -544,6 +572,15 @@ export default function App() {
         </section>
 
         <aside className="panel side">
+          <section className="info-card">
+            <h2 className="h2">How to use this</h2>
+            <ol className="steps">
+              <li>Click a zoning polygon on the map to load the selected zone.</li>
+              <li>Ingest linked PDFs for that zone, or upload your own PDF.</li>
+              <li>Ask a zoning question and review the cited sources.</li>
+            </ol>
+          </section>
+
           <h2 className="h2">Selected zone</h2>
           {atPointError && <p className="err">{atPointError}</p>}
           {atPointLoading && (
@@ -578,11 +615,16 @@ export default function App() {
               <div className="zone-hero">
                 <div className="zone-hero__row">
                   <span className="zone-hero__code">{selected.zoneCode}</span>
-                  <span className="badge badge--mun">{selected.municipality}</span>
+                  <span className="badge badge--mun">{titleCaseMunicipality(selected.municipality)}</span>
                 </div>
                 {selected.zoneName && (
                   <p className="zone-hero__name">{selected.zoneName}</p>
                 )}
+                <div className="zone-meta-row">
+                  <span className="mini-pill">Zone id {selected.id}</span>
+                  {selected.zoneType && <span className="mini-pill">{selected.zoneType}</span>}
+                  {selected.status && <span className="mini-pill">{selected.status}</span>}
+                </div>
               </div>
 
               <section className="zone-section">
@@ -791,13 +833,30 @@ export default function App() {
           <h2 className="h2">Follow-up (RAG)</h2>
           <p className="muted small">
             Default insights come from <code>POST …/analyze</code>. Ask another question with{' '}
-            <code>POST {API.rag}</code> (same zone filters).
+            <code>POST {API.rag}</code>
+            {selected
+              ? ` — zone context: ${selected.zoneCode} (${titleCaseMunicipality(selected.municipality)})`
+              : ' — click a polygon first for zone-aware answers'}
+            .
           </p>
+          <div className="prompt-row">
+            {promptChips.map((prompt) => (
+              <button
+                key={prompt}
+                type="button"
+                className="prompt-chip"
+                onClick={() => setRagQuestion(prompt)}
+              >
+                {prompt}
+              </button>
+            ))}
+          </div>
           <textarea
             className="textarea"
             rows={3}
             value={ragQuestion}
             onChange={(e) => setRagQuestion(e.target.value)}
+            placeholder="Ask about permitted uses, setbacks, parking, density, or what bylaw sections to read first."
           />
           <button
             type="button"
@@ -808,6 +867,11 @@ export default function App() {
             {ragLoading ? <Loader2 size={16} className="spin" /> : <Sparkles size={16} />}
             Ask
           </button>
+          {!selected && (
+            <p className="muted small">
+              Tip: select a zone first so the answer can use zone-specific evidence and linked documents.
+            </p>
+          )}
           {ragError && <p className="err">{ragError}</p>}
           {ragData?.answer && (
             <div className="rag-answer">
@@ -845,8 +909,8 @@ export default function App() {
 
           <h2 className="h2">Upload PDF</h2>
           <p className="muted small">
-            <code>POST {API.documentsUpload}</code> — optional; adds{' '}
-            <code>document_id</code> for RAG.
+            <code>POST {API.documentsUpload}</code> — optional; adds a dedicated{' '}
+            <code>document_id</code> filter for RAG when you want to search one uploaded document.
           </p>
           <input
             type="file"
