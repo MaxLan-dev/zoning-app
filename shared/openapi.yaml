@@ -1,0 +1,30 @@
+openapi: 3.0.3
+info:
+  title: National Zoning & Land Use Data Platform API
+  version: 0.1.0
+  description: |
+    REST API for municipalities, documents, structured zoning data, search, and jobs.
+    Expand this spec as endpoints are implemented; optionally generate a TypeScript client for the frontend.
+servers:
+  - url: http://localhost:5000
+    description: Local Flask
+paths:
+  /api/v1/health:
+    get:
+      summary: Service health check
+      operationId: getHealth
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, service]
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                  service:
+                    type: string
+                    example: zoning-api

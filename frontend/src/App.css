@@ -1,0 +1,48 @@
+.app {
+  max-width: 40rem;
+  margin: 0 auto;
+  padding: 2rem 1.5rem;
+  font-family: system-ui, sans-serif;
+  line-height: 1.5;
+  color: #1a1a1a;
+}
+
+.header h1 {
+  font-size: 1.35rem;
+  font-weight: 650;
+  margin: 0 0 0.5rem;
+}
+
+.tagline {
+  margin: 0;
+  font-size: 0.9rem;
+  color: #444;
+}
+
+.panel {
+  margin-top: 2rem;
+  padding: 1rem 1.25rem;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  background: #fafafa;
+}
+
+.panel h2 {
+  margin: 0 0 0.75rem;
+  font-size: 1rem;
+}
+
+.ok {
+  margin: 0;
+  color: #0d5c2e;
+}
+
+.err {
+  margin: 0;
+  color: #8a1c1c;
+  font-size: 0.9rem;
+}
+
+code {
+  font-size: 0.9em;
+}
