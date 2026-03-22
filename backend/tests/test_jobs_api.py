@@ -64,6 +64,9 @@ def test_ingest_zoning_creates_run_and_records(client, monkeypatch):
     assert run["status"] == "completed"
     assert run["insertedCount"] == 1
     assert run["updatedCount"] == 0
+    assert run["addedCount"] == 1
+    assert run["unchangedCount"] == 0
+    assert run["removedCount"] == 0
     assert run["normalizedCount"] == 1
     assert run["totalFeatures"] == 1
 
@@ -127,9 +130,76 @@ def test_ingest_zoning_updates_existing_records(client, monkeypatch):
     assert first.status_code == 201
     assert second.status_code == 201
     assert first.get_json()["run"]["insertedCount"] == 1
+    assert first.get_json()["run"]["addedCount"] == 1
     assert second.get_json()["run"]["updatedCount"] == 1
+    assert second.get_json()["run"]["addedCount"] == 0
+    assert second.get_json()["run"]["unchangedCount"] == 0
+    assert second.get_json()["run"]["removedCount"] == 0
 
     with client.application.app_context():
         records = ZoningRecord.query.all()
     assert len(records) == 1
     assert records[0].zone_code == "RES-3"
+
+
+def test_ingest_zoning_counts_removed_and_unchanged(client, monkeypatch):
+    responses = [
+        {
+            "type": "FeatureCollection",
+            "features": [
+                {
+                    "type": "Feature",
+                    "properties": {"OBJECTID": 1, "ZONE_CLASS": "RES-2"},
+                    "geometry": {"type": "Polygon", "coordinates": []},
+                },
+                {
+                    "type": "Feature",
+                    "properties": {"OBJECTID": 2, "ZONE_CLASS": "RES-3"},
+                    "geometry": {"type": "Polygon", "coordinates": []},
+                },
+            ],
+        },
+        {
+            "type": "FeatureCollection",
+            "features": [
+                {
+                    "type": "Feature",
+                    "properties": {"OBJECTID": 1, "ZONE_CLASS": "RES-2"},
+                    "geometry": {"type": "Polygon", "coordinates": []},
+                }
+            ],
+        },
+    ]
+
+    def fake_scrape_geojson_data(
+        *,
+        source_url,
+        geojson_url,
+        allowed_domains,
+        paginate,
+        page_size,
+        max_pages,
+    ):
+        return type(
+            "Scraped",
+            (),
+            {
+                "source_url": source_url,
+                "geojson_url": geojson_url,
+                "feature_collection": responses.pop(0),
+            },
+        )()
+
+    monkeypatch.setattr(
+        "app.services.ingestion_service.scrape_geojson_data",
+        fake_scrape_geojson_data,
+    )
+
+    first = client.post("/api/v1/jobs/ingest-zoning", json={"municipality": "kitchener"})
+    second = client.post("/api/v1/jobs/ingest-zoning", json={"municipality": "kitchener"})
+    assert first.status_code == 201
+    assert second.status_code == 201
+    second_run = second.get_json()["run"]
+    assert second_run["addedCount"] == 0
+    assert second_run["unchangedCount"] == 1
+    assert second_run["removedCount"] == 1

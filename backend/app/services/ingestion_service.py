@@ -25,6 +25,24 @@ class IngestZoningRequest:
 
 
 def ingest_zoning_records(request: IngestZoningRequest) -> IngestionRun:
+    previous_run = (
+        IngestionRun.query.filter_by(
+            municipality=request.template.slug,
+            status="completed",
+        )
+        .order_by(IngestionRun.started_at.desc())
+        .first()
+    )
+    previous_hashes_by_source_id: dict[str, str] = {}
+    if previous_run is not None:
+        previous_records = ZoningRecord.query.filter_by(
+            municipality=request.template.slug,
+            last_run_id=previous_run.id,
+        ).all()
+        previous_hashes_by_source_id = {
+            record.source_object_id: record.content_hash for record in previous_records
+        }
+
     run = IngestionRun(
         municipality=request.template.slug,
         status="running",
@@ -52,13 +70,23 @@ def ingest_zoning_records(request: IngestZoningRequest) -> IngestionRun:
 
         inserted_count = 0
         updated_count = 0
+        added_count = 0
+        unchanged_count = 0
+        seen_source_ids: set[str] = set()
 
         for record in normalized.records:
             source_object_id = record.get("sourceObjectId")
             if not isinstance(source_object_id, str) or not source_object_id:
                 continue
+            seen_source_ids.add(source_object_id)
 
             content_hash = _compute_record_hash(record)
+            previous_content_hash = previous_hashes_by_source_id.get(source_object_id)
+            if previous_content_hash is None:
+                added_count += 1
+            elif previous_content_hash == content_hash:
+                unchanged_count += 1
+
             existing = ZoningRecord.query.filter_by(
                 municipality=request.template.slug,
                 source_object_id=source_object_id,
@@ -110,11 +138,16 @@ def ingest_zoning_records(request: IngestZoningRequest) -> IngestionRun:
                     updated_count += 1
                 existing.last_run_id = run.id
 
+        removed_count = len(set(previous_hashes_by_source_id.keys()) - seen_source_ids)
+
         run.status = "completed"
         run.total_features = normalized.total_features
         run.normalized_count = normalized.normalized_count
         run.inserted_count = inserted_count
         run.updated_count = updated_count
+        run.added_count = added_count
+        run.unchanged_count = unchanged_count
+        run.removed_count = removed_count
         run.skipped_count = normalized.skipped_count
         run.error_count = 0
         run.error_message = None
@@ -141,6 +174,9 @@ def serialize_ingestion_run(run: IngestionRun) -> dict[str, object]:
         "normalizedCount": run.normalized_count,
         "insertedCount": run.inserted_count,
         "updatedCount": run.updated_count,
+        "addedCount": run.added_count,
+        "unchangedCount": run.unchanged_count,
+        "removedCount": run.removed_count,
         "skippedCount": run.skipped_count,
         "errorCount": run.error_count,
         "errorMessage": run.error_message,
