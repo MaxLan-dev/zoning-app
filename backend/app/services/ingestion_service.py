@@ -164,6 +164,25 @@ def ingest_zoning_records(request: IngestZoningRequest) -> IngestionRun:
 
 
 def serialize_ingestion_run(run: IngestionRun) -> dict[str, object]:
+    review_flags: list[str] = []
+    if run.error_count > 0:
+        review_flags.append("errors_present")
+    if run.skipped_count > 0:
+        review_flags.append("skipped_features")
+    if run.total_features > 0 and run.normalized_count < run.total_features:
+        review_flags.append("partial_normalization")
+    if run.removed_count > 0:
+        review_flags.append("zones_removed")
+    if run.added_count > 0 or run.updated_count > 0:
+        review_flags.append("changes_detected")
+
+    coverage_rate = (
+        round((run.normalized_count / run.total_features) * 100, 2)
+        if run.total_features > 0
+        else None
+    )
+    change_count = run.added_count + run.updated_count + run.removed_count
+
     return {
         "id": run.id,
         "municipality": run.municipality,
@@ -180,6 +199,10 @@ def serialize_ingestion_run(run: IngestionRun) -> dict[str, object]:
         "skippedCount": run.skipped_count,
         "errorCount": run.error_count,
         "errorMessage": run.error_message,
+        "changeCount": change_count,
+        "hasChanges": change_count > 0,
+        "coverageRate": coverage_rate,
+        "reviewFlags": review_flags,
         "startedAt": run.started_at.isoformat() if run.started_at else None,
         "finishedAt": run.finished_at.isoformat() if run.finished_at else None,
     }

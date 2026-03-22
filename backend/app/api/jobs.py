@@ -4,10 +4,62 @@ from collections.abc import Iterable
 
 from flask import Blueprint, jsonify, request
 
-from app.ingestion.scrapers.templates import get_municipality_template
+from app.ingestion.scrapers.templates import (
+    get_municipality_template,
+    list_municipality_templates,
+)
+from app.models import IngestionRun
 from app.services import IngestZoningRequest, ingest_zoning_records, serialize_ingestion_run
 
 bp = Blueprint("jobs", __name__, url_prefix="/api/v1/jobs")
+
+
+@bp.get("/ingest-zoning/municipalities")
+def list_supported_municipalities():
+    templates = list_municipality_templates()
+    return jsonify(
+        {
+            "municipalities": [
+                {
+                    "slug": template.slug,
+                    "displayName": template.display_name,
+                    "sourceUrl": template.source_url,
+                    "geojsonUrl": template.default_geojson_url,
+                    "allowedDomains": list(template.allowed_domains),
+                }
+                for template in templates
+            ]
+        }
+    )
+
+
+@bp.get("/ingest-zoning/runs")
+def list_ingestion_runs():
+    municipality = (request.args.get("municipality") or "").strip().lower() or None
+    limit = request.args.get("limit", default=20, type=int)
+    if limit < 1 or limit > 100:
+        return jsonify({"error": "`limit` must be between 1 and 100"}), 400
+
+    query = IngestionRun.query
+    if municipality:
+        query = query.filter(IngestionRun.municipality == municipality)
+
+    runs = query.order_by(IngestionRun.started_at.desc()).limit(limit).all()
+
+    latest_by_municipality: dict[str, dict[str, object]] = {}
+    latest_runs = (
+        IngestionRun.query.order_by(IngestionRun.municipality.asc(), IngestionRun.started_at.desc()).all()
+    )
+    for run in latest_runs:
+        if run.municipality not in latest_by_municipality:
+            latest_by_municipality[run.municipality] = serialize_ingestion_run(run)
+
+    return jsonify(
+        {
+            "runs": [serialize_ingestion_run(run) for run in runs],
+            "latestByMunicipality": latest_by_municipality,
+        }
+    )
 
 
 @bp.post("/ingest-zoning")

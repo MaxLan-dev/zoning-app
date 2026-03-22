@@ -6,6 +6,7 @@ import {
   AlertCircle,
   Braces,
   Building2,
+  Database,
   Copy,
   ExternalLink,
   Loader2,
@@ -32,6 +33,9 @@ const API = {
   zone: (id: number) => `/api/v1/zones/${id}`,
   zoneIngestDocs: (id: number) => `/api/v1/zones/${id}/ingest-documents`,
   zoneAnalyze: (id: number) => `/api/v1/zones/${id}/analyze`,
+  ingestMunicipalities: '/api/v1/jobs/ingest-zoning/municipalities',
+  ingestionRuns: '/api/v1/jobs/ingest-zoning/runs?limit=12',
+  ingestZoning: '/api/v1/jobs/ingest-zoning',
   rag: '/api/v1/rag',
   documentsUpload: '/api/v1/documents/upload',
 } as const
@@ -127,6 +131,41 @@ type AnalyzeResponse = {
   rag: RagRes & { query?: string }
 }
 
+type MunicipalityTemplate = {
+  slug: string
+  displayName: string
+  sourceUrl: string
+  geojsonUrl?: string | null
+  allowedDomains: string[]
+}
+
+type IngestionRunSummary = {
+  id: string
+  municipality: string
+  status: string
+  totalFeatures: number
+  normalizedCount: number
+  insertedCount: number
+  updatedCount: number
+  addedCount: number
+  unchangedCount: number
+  removedCount: number
+  skippedCount: number
+  errorCount: number
+  errorMessage?: string | null
+  changeCount: number
+  hasChanges: boolean
+  coverageRate?: number | null
+  reviewFlags: string[]
+  startedAt?: string | null
+  finishedAt?: string | null
+}
+
+type IngestionRunsResponse = {
+  runs: IngestionRunSummary[]
+  latestByMunicipality: Record<string, IngestionRunSummary>
+}
+
 type ZoneFeatureProperties = {
   id?: number
   municipality?: string
@@ -173,6 +212,25 @@ function formatAnalyzeError(message: string) {
     return 'The app could not index linked zoning PDFs for this area. You can still browse the open-data record or upload a document manually below.'
   }
   return formatRagError(message)
+}
+
+function formatFlag(flag: string) {
+  return flag
+    .split('_')
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ')
+}
+
+function formatRelativeDate(value?: string | null) {
+  if (!value) return 'Not available'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return 'Not available'
+  const diffMs = Date.now() - date.getTime()
+  const diffHours = Math.round(diffMs / (1000 * 60 * 60))
+  if (diffHours < 1) return 'Updated <1 hour ago'
+  if (diffHours < 24) return `Updated ${diffHours}h ago`
+  const diffDays = Math.round(diffHours / 24)
+  return `Updated ${diffDays}d ago`
 }
 
 function getFeatureProps(feature?: Feature | null): ZoneFeatureProperties {
@@ -250,6 +308,14 @@ function FitBounds({ bounds }: { bounds: L.LatLngBounds | null }) {
 export default function App() {
   const [health, setHealth] = useState<HealthRes | null>(null)
   const [summary, setSummary] = useState<RegionSummaryRes | null>(null)
+  const [municipalityTemplates, setMunicipalityTemplates] = useState<MunicipalityTemplate[]>([])
+  const [ingestionRuns, setIngestionRuns] = useState<IngestionRunSummary[]>([])
+  const [latestRunsByMunicipality, setLatestRunsByMunicipality] = useState<
+    Record<string, IngestionRunSummary>
+  >({})
+  const [operationsLoading, setOperationsLoading] = useState(true)
+  const [operationsError, setOperationsError] = useState<string | null>(null)
+  const [refreshingMunicipality, setRefreshingMunicipality] = useState<string | null>(null)
   const [geojson, setGeojson] = useState<FeatureCollection | null>(null)
   const [geoLoading, setGeoLoading] = useState(true)
   const [geoError, setGeoError] = useState<string | null>(null)
@@ -361,11 +427,17 @@ export default function App() {
   }, [selected])
 
   const hasActiveMapFilter = municipalityFilter !== 'all' || zoneSearch.trim().length > 0
+  const selectedMunicipalityRun = selected
+    ? latestRunsByMunicipality[selected.municipality]
+    : null
 
   const loadDashboard = useCallback(async () => {
-    const [h, s] = await Promise.allSettled([
+    setOperationsLoading(true)
+    const [h, s, templatesRes, runsRes] = await Promise.allSettled([
       fetch(API.health),
       fetch(API.zonesRegionSummary),
+      fetch(API.ingestMunicipalities),
+      fetch(API.ingestionRuns),
     ])
     if (h.status === 'fulfilled' && h.value.ok) {
       setHealth((await h.value.json()) as HealthRes)
@@ -377,6 +449,23 @@ export default function App() {
     } else {
       setSummary(null)
     }
+    if (templatesRes.status === 'fulfilled' && templatesRes.value.ok) {
+      const data = (await templatesRes.value.json()) as { municipalities?: MunicipalityTemplate[] }
+      setMunicipalityTemplates(data.municipalities ?? [])
+      setOperationsError(null)
+    } else {
+      setMunicipalityTemplates([])
+      setOperationsError('Could not load supported municipality templates.')
+    }
+    if (runsRes.status === 'fulfilled' && runsRes.value.ok) {
+      const data = (await runsRes.value.json()) as IngestionRunsResponse
+      setIngestionRuns(data.runs ?? [])
+      setLatestRunsByMunicipality(data.latestByMunicipality ?? {})
+    } else {
+      setIngestionRuns([])
+      setLatestRunsByMunicipality({})
+    }
+    setOperationsLoading(false)
   }, [])
 
   const loadGeojson = useCallback(async () => {
@@ -401,6 +490,31 @@ export default function App() {
       setGeoLoading(false)
     }
   }, [])
+
+  const triggerMunicipalityRefresh = useCallback(
+    async (slug: string) => {
+      setRefreshingMunicipality(slug)
+      setOperationsError(null)
+      try {
+        const res = await fetch(API.ingestZoning, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ municipality: slug }),
+        })
+        const data = (await res.json()) as { error?: string; message?: string }
+        if (!res.ok) {
+          setOperationsError(data.message ?? data.error ?? `HTTP ${res.status}`)
+          return
+        }
+        await Promise.all([loadDashboard(), loadGeojson()])
+      } catch {
+        setOperationsError('Could not start the municipality refresh job.')
+      } finally {
+        setRefreshingMunicipality(null)
+      }
+    },
+    [loadDashboard, loadGeojson],
+  )
 
   useEffect(() => {
     void loadDashboard()
@@ -828,6 +942,97 @@ export default function App() {
               <li>Ingest linked PDFs for that zone, or upload your own PDF.</li>
               <li>Ask a zoning question and review the cited sources.</li>
             </ol>
+          </section>
+
+          <section className="ops-card">
+            <div className="ops-card__head">
+              <div>
+                <h2 className="h2">Data operations</h2>
+                <p className="muted small">
+                  Refresh supported municipalities and monitor change detection.
+                </p>
+              </div>
+              <Database size={18} />
+            </div>
+            {operationsError && <p className="err">{operationsError}</p>}
+            {operationsLoading && <p className="muted small">Loading municipality operations…</p>}
+            <div className="ops-grid">
+              {municipalityTemplates.map((template) => {
+                const latestRun = latestRunsByMunicipality[template.slug]
+                return (
+                  <div className="ops-tile" key={template.slug}>
+                    <div className="ops-tile__top">
+                      <strong>{template.displayName}</strong>
+                      <button
+                        type="button"
+                        className="btn btn--ghost btn--small"
+                        disabled={refreshingMunicipality === template.slug}
+                        onClick={() => void triggerMunicipalityRefresh(template.slug)}
+                      >
+                        {refreshingMunicipality === template.slug ? (
+                          <Loader2 size={14} className="spin" />
+                        ) : (
+                          <RefreshCw size={14} />
+                        )}
+                        Refresh
+                      </button>
+                    </div>
+                    {latestRun ? (
+                      <>
+                        <div className="ops-metrics">
+                          <span className={`tag tag--${latestRun.status}`}>{latestRun.status}</span>
+                          <span>{latestRun.totalFeatures} features</span>
+                          <span>{latestRun.changeCount} changes</span>
+                        </div>
+                        <p className="muted small">{formatRelativeDate(latestRun.finishedAt)}</p>
+                        {latestRun.reviewFlags.length > 0 && (
+                          <div className="ops-flags">
+                            {latestRun.reviewFlags.map((flag) => (
+                              <span key={flag} className="mini-pill">
+                                {formatFlag(flag)}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                      </>
+                    ) : (
+                      <p className="muted small">No ingestion run recorded yet.</p>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+            {selectedMunicipalityRun && (
+              <div className="ops-selected">
+                <strong>Selected municipality freshness</strong>
+                <p className="muted small">
+                  {titleCaseMunicipality(selectedMunicipalityRun.municipality)} ·{' '}
+                  {formatRelativeDate(selectedMunicipalityRun.finishedAt)} · coverage{' '}
+                  {selectedMunicipalityRun.coverageRate ?? 0}%
+                </p>
+              </div>
+            )}
+            {ingestionRuns.length > 0 && (
+              <details className="zone-details zone-details--ops">
+                <summary>Recent ingestion runs</summary>
+                <div className="runs-list">
+                  {ingestionRuns.slice(0, 6).map((run) => (
+                    <div key={run.id} className="run-row">
+                      <div>
+                        <strong>{titleCaseMunicipality(run.municipality)}</strong>
+                        <div className="muted small">
+                          {formatRelativeDate(run.finishedAt)} · {run.totalFeatures} features
+                        </div>
+                      </div>
+                      <div className="run-row__meta">
+                        <span className={`tag tag--${run.status}`}>{run.status}</span>
+                        <span className="muted small">{run.changeCount} changes</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </details>
+            )}
           </section>
 
           <h2 className="h2">Selected zone</h2>

@@ -1,3 +1,5 @@
+from app.extensions import db
+from app.models import IngestionRun
 from app.models import ZoningRecord
 
 
@@ -203,3 +205,64 @@ def test_ingest_zoning_counts_removed_and_unchanged(client, monkeypatch):
     assert second_run["addedCount"] == 0
     assert second_run["unchangedCount"] == 1
     assert second_run["removedCount"] == 1
+
+
+def test_list_supported_municipalities(client):
+    res = client.get("/api/v1/jobs/ingest-zoning/municipalities")
+    assert res.status_code == 200
+    data = res.get_json()
+    slugs = {item["slug"] for item in data["municipalities"]}
+    assert {"waterloo", "kitchener"}.issubset(slugs)
+
+
+def test_list_ingestion_runs_returns_latest_by_municipality(client, app):
+    with app.app_context():
+        first = IngestionRun(
+            municipality="waterloo",
+            status="completed",
+            source_url="https://example.com/w1",
+            geojson_url="https://example.com/w1.geojson",
+            total_features=10,
+            normalized_count=8,
+            inserted_count=8,
+            updated_count=1,
+            added_count=2,
+            unchanged_count=5,
+            removed_count=1,
+            skipped_count=2,
+            error_count=0,
+        )
+        second = IngestionRun(
+            municipality="kitchener",
+            status="failed",
+            source_url="https://example.com/k1",
+            geojson_url="https://example.com/k1.geojson",
+            total_features=12,
+            normalized_count=12,
+            inserted_count=12,
+            updated_count=0,
+            added_count=0,
+            unchanged_count=12,
+            removed_count=0,
+            skipped_count=0,
+            error_count=1,
+            error_message="boom",
+        )
+        db.session.add(first)
+        db.session.add(second)
+        db.session.commit()
+
+    res = client.get("/api/v1/jobs/ingest-zoning/runs?limit=5")
+    assert res.status_code == 200
+    data = res.get_json()
+    assert len(data["runs"]) == 2
+    assert data["latestByMunicipality"]["waterloo"]["coverageRate"] == 80.0
+    assert "partial_normalization" in data["latestByMunicipality"]["waterloo"]["reviewFlags"]
+    assert "changes_detected" in data["latestByMunicipality"]["waterloo"]["reviewFlags"]
+    assert "errors_present" in data["latestByMunicipality"]["kitchener"]["reviewFlags"]
+
+
+def test_list_ingestion_runs_validates_limit(client):
+    res = client.get("/api/v1/jobs/ingest-zoning/runs?limit=0")
+    assert res.status_code == 400
+    assert "limit" in res.get_json()["error"]
