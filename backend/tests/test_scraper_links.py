@@ -57,3 +57,37 @@ def test_extract_geojson_candidates_from_anchors_and_scripts():
         "https://example.org/data/zones.geojson",
         "https://example.org/data/neighborhoods.json",
     ]
+
+
+def test_fetch_geojson_payload_paginates_arcgis_query(monkeypatch):
+    with MunicipalWebScraper() as scraper:
+        calls: list[str] = []
+
+        def fake_fetch(url: str):
+            calls.append(url)
+            if "resultOffset=0" in url:
+                return {
+                    "type": "FeatureCollection",
+                    "features": [
+                        {"type": "Feature", "properties": {"OBJECTID": 1}},
+                        {"type": "Feature", "properties": {"OBJECTID": 2}},
+                    ],
+                }
+            if "resultOffset=2" in url:
+                return {
+                    "type": "FeatureCollection",
+                    "features": [{"type": "Feature", "properties": {"OBJECTID": 3}}],
+                }
+            return {"type": "FeatureCollection", "features": []}
+
+        monkeypatch.setattr(scraper, "_fetch_json", fake_fetch)
+
+        payload = scraper._fetch_geojson_payload(
+            "https://example.org/MapServer/12/query?where=1%3D1&outFields=*&f=geojson",
+            paginate=True,
+            page_size=2,
+            max_pages=10,
+        )
+
+    assert len(payload["features"]) == 3
+    assert len(calls) == 2

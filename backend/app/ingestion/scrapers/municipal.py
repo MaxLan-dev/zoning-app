@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import re
 from typing import Any
-from urllib.parse import urldefrag, urljoin, urlparse
+from urllib.parse import parse_qsl, urlencode, urldefrag, urljoin, urlparse, urlunparse
 
 import httpx
 from bs4 import BeautifulSoup
@@ -131,6 +131,9 @@ class MunicipalWebScraper:
         source_url: str,
         geojson_url: str | None = None,
         allowed_domains: set[str] | None = None,
+        paginate: bool = True,
+        page_size: int | None = None,
+        max_pages: int = 25,
     ) -> GeoJSONResult:
         candidate_urls = (
             [geojson_url]
@@ -151,7 +154,12 @@ class MunicipalWebScraper:
                 continue
 
             try:
-                payload = self._fetch_json(candidate_url)
+                payload = self._fetch_geojson_payload(
+                    candidate_url,
+                    paginate=paginate,
+                    page_size=page_size,
+                    max_pages=max_pages,
+                )
             except (httpx.HTTPError, ValueError):
                 continue
 
@@ -261,6 +269,84 @@ class MunicipalWebScraper:
         response.raise_for_status()
         return response.json()
 
+    def _fetch_geojson_payload(
+        self,
+        url: str,
+        *,
+        paginate: bool,
+        page_size: int | None,
+        max_pages: int,
+    ) -> object:
+        if paginate and _looks_like_arcgis_query_url(url):
+            return self._fetch_arcgis_geojson_pages(
+                url,
+                page_size=page_size,
+                max_pages=max_pages,
+            )
+        return self._fetch_json(url)
+
+    def _fetch_arcgis_geojson_pages(
+        self,
+        url: str,
+        *,
+        page_size: int | None,
+        max_pages: int,
+    ) -> dict[str, Any]:
+        if max_pages < 1:
+            raise ValueError("`max_pages` must be at least 1")
+
+        parsed = urlparse(url)
+        base_params = dict(parse_qsl(parsed.query, keep_blank_values=True))
+
+        request_page_size = (
+            page_size
+            or _coerce_positive_int(base_params.get("resultRecordCount"))
+            or 2000
+        )
+        current_offset = _coerce_non_negative_int(base_params.get("resultOffset")) or 0
+        features: list[dict[str, Any]] = []
+        base_collection: dict[str, Any] | None = None
+
+        for _page in range(max_pages):
+            page_params = dict(base_params)
+            page_params["f"] = "geojson"
+            page_params["resultRecordCount"] = str(request_page_size)
+            page_params["resultOffset"] = str(current_offset)
+            page_url = _replace_query_params(parsed=parsed, params=page_params)
+
+            payload = self._fetch_json(page_url)
+            feature_collection = _coerce_feature_collection(payload)
+            if feature_collection is None:
+                raise ValueError("ArcGIS paged response was not a GeoJSON FeatureCollection")
+
+            if base_collection is None:
+                base_collection = {
+                    key: value
+                    for key, value in feature_collection.items()
+                    if key != "features"
+                }
+
+            page_features = feature_collection.get("features", [])
+            if isinstance(page_features, list):
+                features.extend(
+                    feature for feature in page_features if isinstance(feature, dict)
+                )
+
+            exceeded_transfer_limit = bool(feature_collection.get("exceededTransferLimit"))
+            feature_count = len(page_features) if isinstance(page_features, list) else 0
+
+            if feature_count == 0:
+                break
+            if feature_count < request_page_size and not exceeded_transfer_limit:
+                break
+
+            current_offset += request_page_size
+
+        return {
+            **(base_collection or {"type": "FeatureCollection"}),
+            "features": features,
+        }
+
 
 def scrape_municipal_page(
     url: str,
@@ -283,12 +369,18 @@ def scrape_geojson_data(
     *,
     geojson_url: str | None = None,
     allowed_domains: set[str] | None = None,
+    paginate: bool = True,
+    page_size: int | None = None,
+    max_pages: int = 25,
 ) -> GeoJSONResult:
     with MunicipalWebScraper() as scraper:
         return scraper.scrape_geojson(
             source_url=source_url,
             geojson_url=geojson_url,
             allowed_domains=allowed_domains,
+            paginate=paginate,
+            page_size=page_size,
+            max_pages=max_pages,
         )
 
 
@@ -330,3 +422,49 @@ def _coerce_feature_collection(payload: object) -> dict[str, Any] | None:
     if not isinstance(features, list):
         return None
     return payload
+
+
+def _looks_like_arcgis_query_url(url: str) -> bool:
+    parsed = urlparse(url)
+    path = parsed.path.lower()
+    if "/query" not in path:
+        return False
+    params = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    return params.get("f", "").lower() == "geojson"
+
+
+def _replace_query_params(*, parsed, params: dict[str, str]) -> str:
+    return urlunparse(
+        (
+            parsed.scheme,
+            parsed.netloc,
+            parsed.path,
+            parsed.params,
+            urlencode(params, doseq=True),
+            parsed.fragment,
+        )
+    )
+
+
+def _coerce_positive_int(value: str | None) -> int | None:
+    if value is None:
+        return None
+    try:
+        parsed = int(value)
+    except ValueError:
+        return None
+    if parsed < 1:
+        return None
+    return parsed
+
+
+def _coerce_non_negative_int(value: str | None) -> int | None:
+    if value is None:
+        return None
+    try:
+        parsed = int(value)
+    except ValueError:
+        return None
+    if parsed < 0:
+        return None
+    return parsed
