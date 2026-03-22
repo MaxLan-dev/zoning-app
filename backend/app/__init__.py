@@ -13,6 +13,8 @@ def create_app(config_name: str | None = None) -> Flask:
     app.config.from_object(config_by_name[cfg])
 
     db.init_app(app)
+    from app import models  # noqa: F401
+
     migrate.init_app(app, db)
     cors.init_app(
         app,
