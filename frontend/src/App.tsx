@@ -330,6 +330,7 @@ export default function App() {
   const [matches, setMatches] = useState<ZoneMatch[]>([])
   const [matchPick, setMatchPick] = useState(0)
   const [clickLabel, setClickLabel] = useState<string | null>(null)
+  const [sideTab, setSideTab] = useState<'zone' | 'operations'>('zone')
 
   const [analyzeLoading, setAnalyzeLoading] = useState(false)
   const [analyzeError, setAnalyzeError] = useState<string | null>(null)
@@ -630,6 +631,7 @@ export default function App() {
       setRagError(null)
       return
     }
+    setSideTab('zone')
     void runAnalyze(selected.id)
   }, [selected?.id, runAnalyze])
 
@@ -935,137 +937,169 @@ export default function App() {
         </section>
 
         <aside className="panel side">
-          <section className="info-card">
-            <h2 className="h2">How to use this</h2>
-            <ol className="steps">
-              <li>Click a zoning polygon on the map to load the selected zone.</li>
-              <li>Ingest linked PDFs for that zone, or upload your own PDF.</li>
-              <li>Ask a zoning question and review the cited sources.</li>
-            </ol>
-          </section>
-
-          <section className="ops-card">
-            <div className="ops-card__head">
+          <div className="side-nav">
+            <div className="side-nav__head">
               <div>
-                <h2 className="h2">Data operations</h2>
+                <h2 className="h2">Workspace</h2>
                 <p className="muted small">
-                  Refresh supported municipalities and monitor change detection.
+                  Keep the research view focused while moving operations into a separate pane.
                 </p>
               </div>
-              <Database size={18} />
             </div>
-            {operationsError && <p className="err">{operationsError}</p>}
-            {operationsLoading && <p className="muted small">Loading municipality operations…</p>}
-            <div className="ops-grid">
-              {municipalityTemplates.map((template) => {
-                const latestRun = latestRunsByMunicipality[template.slug]
-                return (
-                  <div className="ops-tile" key={template.slug}>
-                    <div className="ops-tile__top">
-                      <strong>{template.displayName}</strong>
-                      <button
-                        type="button"
-                        className="btn btn--ghost btn--small"
-                        disabled={refreshingMunicipality === template.slug}
-                        onClick={() => void triggerMunicipalityRefresh(template.slug)}
-                      >
-                        {refreshingMunicipality === template.slug ? (
-                          <Loader2 size={14} className="spin" />
-                        ) : (
-                          <RefreshCw size={14} />
-                        )}
-                        Refresh
-                      </button>
-                    </div>
-                    {latestRun ? (
-                      <>
-                        <div className="ops-metrics">
-                          <span className={`tag tag--${latestRun.status}`}>{latestRun.status}</span>
-                          <span>{latestRun.totalFeatures} features</span>
-                          <span>{latestRun.changeCount} changes</span>
-                        </div>
-                        <p className="muted small">{formatRelativeDate(latestRun.finishedAt)}</p>
-                        {latestRun.reviewFlags.length > 0 && (
-                          <div className="ops-flags">
-                            {latestRun.reviewFlags.map((flag) => (
-                              <span key={flag} className="mini-pill">
-                                {formatFlag(flag)}
-                              </span>
-                            ))}
-                          </div>
-                        )}
-                      </>
-                    ) : (
-                      <p className="muted small">No ingestion run recorded yet.</p>
-                    )}
-                  </div>
-                )
-              })}
-            </div>
-            {selectedMunicipalityRun && (
-              <div className="ops-selected">
-                <strong>Selected municipality freshness</strong>
-                <p className="muted small">
-                  {titleCaseMunicipality(selectedMunicipalityRun.municipality)} ·{' '}
-                  {formatRelativeDate(selectedMunicipalityRun.finishedAt)} · coverage{' '}
-                  {selectedMunicipalityRun.coverageRate ?? 0}%
-                </p>
-              </div>
-            )}
-            {ingestionRuns.length > 0 && (
-              <details className="zone-details zone-details--ops">
-                <summary>Recent ingestion runs</summary>
-                <div className="runs-list">
-                  {ingestionRuns.slice(0, 6).map((run) => (
-                    <div key={run.id} className="run-row">
-                      <div>
-                        <strong>{titleCaseMunicipality(run.municipality)}</strong>
-                        <div className="muted small">
-                          {formatRelativeDate(run.finishedAt)} · {run.totalFeatures} features
-                        </div>
-                      </div>
-                      <div className="run-row__meta">
-                        <span className={`tag tag--${run.status}`}>{run.status}</span>
-                        <span className="muted small">{run.changeCount} changes</span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </details>
-            )}
-          </section>
-
-          <h2 className="h2">Selected zone</h2>
-          {atPointError && <p className="err">{atPointError}</p>}
-          {atPointLoading && (
-            <p className="muted">
-              <Loader2 size={14} className="spin" /> Resolving{' '}
-              {clickLabel ?? '…'}
-            </p>
-          )}
-          {!atPointLoading && matches.length === 0 && clickLabel && (
-            <p className="muted">No zone at this location ({clickLabel}).</p>
-          )}
-          {!atPointLoading && matches.length === 0 && !clickLabel && (
-            <p className="muted">Click the map to select a zoning polygon.</p>
-          )}
-          {matches.length > 1 && (
-            <label className="field">
-              <span>Multiple overlaps — pick one</span>
-              <select
-                value={matchPick}
-                onChange={(e) => setMatchPick(Number(e.target.value))}
+            <div className="side-nav__tabs">
+              <button
+                type="button"
+                className={`side-tab ${sideTab === 'zone' ? 'side-tab--active' : ''}`}
+                onClick={() => setSideTab('zone')}
               >
-                {matches.map((m, i) => (
-                  <option key={`${m.id}-${i}`} value={i}>
-                    {m.municipality} · {m.zoneCode} (id {m.id})
-                  </option>
-                ))}
-              </select>
-            </label>
-          )}
-          {selected && (
-            <div className="zone-card">
+                Zone view
+              </button>
+              <button
+                type="button"
+                className={`side-tab ${sideTab === 'operations' ? 'side-tab--active' : ''}`}
+                onClick={() => setSideTab('operations')}
+              >
+                Data operations
+              </button>
+            </div>
+          </div>
+
+          {sideTab === 'operations' ? (
+            <section className="ops-card">
+              <div className="ops-card__head">
+                <div>
+                  <h2 className="h2">Data operations</h2>
+                  <p className="muted small">
+                    Refresh supported municipalities and monitor change detection.
+                  </p>
+                </div>
+                <Database size={18} />
+              </div>
+              {operationsError && <p className="err">{operationsError}</p>}
+              {operationsLoading && <p className="muted small">Loading municipality operations…</p>}
+              <div className="ops-grid">
+                {municipalityTemplates.map((template) => {
+                  const latestRun = latestRunsByMunicipality[template.slug]
+                  return (
+                    <div className="ops-tile" key={template.slug}>
+                      <div className="ops-tile__top">
+                        <strong>{template.displayName}</strong>
+                        <button
+                          type="button"
+                          className="btn btn--ghost btn--small"
+                          disabled={refreshingMunicipality === template.slug}
+                          onClick={() => void triggerMunicipalityRefresh(template.slug)}
+                        >
+                          {refreshingMunicipality === template.slug ? (
+                            <Loader2 size={14} className="spin" />
+                          ) : (
+                            <RefreshCw size={14} />
+                          )}
+                          Refresh
+                        </button>
+                      </div>
+                      {latestRun ? (
+                        <>
+                          <div className="ops-metrics">
+                            <span className={`tag tag--${latestRun.status}`}>{latestRun.status}</span>
+                            <span>{latestRun.totalFeatures} features</span>
+                            <span>{latestRun.changeCount} changes</span>
+                          </div>
+                          <p className="muted small">{formatRelativeDate(latestRun.finishedAt)}</p>
+                          {latestRun.reviewFlags.length > 0 && (
+                            <div className="ops-flags">
+                              {latestRun.reviewFlags.map((flag) => (
+                                <span key={flag} className="mini-pill">
+                                  {formatFlag(flag)}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                        </>
+                      ) : (
+                        <p className="muted small">No ingestion run recorded yet.</p>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+              {selectedMunicipalityRun && (
+                <div className="ops-selected">
+                  <strong>Selected municipality freshness</strong>
+                  <p className="muted small">
+                    {titleCaseMunicipality(selectedMunicipalityRun.municipality)} ·{' '}
+                    {formatRelativeDate(selectedMunicipalityRun.finishedAt)} · coverage{' '}
+                    {selectedMunicipalityRun.coverageRate ?? 0}%
+                  </p>
+                </div>
+              )}
+              {ingestionRuns.length > 0 && (
+                <details className="zone-details zone-details--ops">
+                  <summary>Recent ingestion runs</summary>
+                  <div className="runs-list">
+                    {ingestionRuns.slice(0, 6).map((run) => (
+                      <div key={run.id} className="run-row">
+                        <div>
+                          <strong>{titleCaseMunicipality(run.municipality)}</strong>
+                          <div className="muted small">
+                            {formatRelativeDate(run.finishedAt)} · {run.totalFeatures} features
+                          </div>
+                        </div>
+                        <div className="run-row__meta">
+                          <span className={`tag tag--${run.status}`}>{run.status}</span>
+                          <span className="muted small">{run.changeCount} changes</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </details>
+              )}
+            </section>
+          ) : (
+            <div className="side-stack">
+              <section className="info-card">
+                <h2 className="h2">How to use this</h2>
+                <ol className="steps">
+                  <li>Click a zoning polygon on the map to load the selected zone.</li>
+                  <li>Review the AI summary and core zoning metadata.</li>
+                  <li>Open follow-up questions or documents only when needed.</li>
+                </ol>
+              </section>
+
+              <div className="side-status">
+                <h2 className="h2">Selected zone</h2>
+                {atPointError && <p className="err">{atPointError}</p>}
+                {atPointLoading && (
+                  <p className="muted">
+                    <Loader2 size={14} className="spin" /> Resolving{' '}
+                    {clickLabel ?? '…'}
+                  </p>
+                )}
+                {!atPointLoading && matches.length === 0 && clickLabel && (
+                  <p className="muted">No zone at this location ({clickLabel}).</p>
+                )}
+                {!atPointLoading && matches.length === 0 && !clickLabel && (
+                  <p className="muted">Click the map to select a zoning polygon.</p>
+                )}
+                {matches.length > 1 && (
+                  <label className="field">
+                    <span>Multiple overlaps — pick one</span>
+                    <select
+                      value={matchPick}
+                      onChange={(e) => setMatchPick(Number(e.target.value))}
+                    >
+                      {matches.map((m, i) => (
+                        <option key={`${m.id}-${i}`} value={i}>
+                          {m.municipality} · {m.zoneCode} (id {m.id})
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
+              </div>
+
+              {selected && (
+                <div className="zone-card">
               <div className="zone-hero">
                 <div className="zone-hero__row">
                   <span className="zone-hero__code">{selected.zoneCode}</span>
@@ -1234,185 +1268,193 @@ export default function App() {
                 )}
               </section>
 
-              <section className="zone-section">
-                <h3 className="h3">Official city websites</h3>
-                {(selected.publicResources?.length ?? 0) > 0 ? (
-                  <ul className="resource-links">
-                    {selected.publicResources!.map((r) => (
-                      <li key={r.url}>
-                        <a href={r.url} target="_blank" rel="noreferrer">
-                          {r.label} <ExternalLink size={12} />
-                        </a>
-                      </li>
-                    ))}
-                  </ul>
-                ) : (
-                  <p className="muted small">No curated links for this municipality slug.</p>
-                )}
-              </section>
+                  <details className="side-fold" open>
+                    <summary>Follow-up questions</summary>
+                    <div className="side-fold__body">
+                      <p className="muted small">
+                        Default insights come from <code>POST …/analyze</code>. Ask another question
+                        with <code>POST {API.rag}</code>
+                        {selected
+                          ? ` — zone context: ${selected.zoneCode} (${titleCaseMunicipality(selected.municipality)})`
+                          : ' — click a polygon first for zone-aware answers'}
+                        .
+                      </p>
+                      <div className="prompt-row">
+                        {promptChips.map((prompt) => (
+                          <button
+                            key={prompt}
+                            type="button"
+                            className="prompt-chip"
+                            onClick={() => setRagQuestion(prompt)}
+                          >
+                            {prompt}
+                          </button>
+                        ))}
+                      </div>
+                      <textarea
+                        className="textarea"
+                        rows={3}
+                        value={ragQuestion}
+                        onChange={(e) => setRagQuestion(e.target.value)}
+                        placeholder="Ask about permitted uses, setbacks, parking, density, or what bylaw sections to read first."
+                      />
+                      <button
+                        type="button"
+                        className="btn btn--primary"
+                        disabled={ragLoading}
+                        onClick={() => void runRag()}
+                      >
+                        {ragLoading ? <Loader2 size={16} className="spin" /> : <Sparkles size={16} />}
+                        Ask
+                      </button>
+                      {ragError && <p className="err">{ragError}</p>}
+                      {ragData?.answer && (
+                        <div className="rag-answer">
+                          <FormattedRagAnswer text={ragData.answer} />
+                          {ragData.model && (
+                            <p className="muted small">Model: {ragData.model}</p>
+                          )}
+                          {ragData.sources && ragData.sources.length > 0 && (
+                            <div>
+                              <h3 className="h3">Sources</h3>
+                              <ol className="sources">
+                                {ragData.sources.map((s, i) => (
+                                  <li key={i}>
+                                    <strong>{s.human_label ?? `Passage ${i + 1}`}</strong>
+                                    {s.page != null && <> · p.{s.page}</>}
+                                    {s.score != null && (
+                                      <> · score {typeof s.score === 'number' ? s.score.toFixed(3) : s.score}</>
+                                    )}
+                                    {s.source_url && (
+                                      <div>
+                                        <a href={s.source_url} target="_blank" rel="noreferrer">
+                                          {s.source_url}
+                                        </a>
+                                      </div>
+                                    )}
+                                  </li>
+                                ))}
+                              </ol>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </details>
 
-              <section className="zone-section">
-                <h3 className="h3">Bylaw PDFs from GIS metadata</h3>
-                {selected.sourceDocuments?.length ? (
-                  <ul className="link-list">
-                    {selected.sourceDocuments.map((u) => (
-                      <li key={u}>
-                        <a href={u} target="_blank" rel="noreferrer">
-                          {u.replace(/^https?:\/\//, '').slice(0, 72)}
-                          {u.length > 72 ? '…' : ''}
-                        </a>
-                      </li>
-                    ))}
-                  </ul>
-                ) : (
-                  <div className="callout callout--info">
-                    <p>
-                      <strong>No PDF URLs on this record.</strong> Waterloo and Kitchener zoning
-                      layers usually store zone codes and labels, not direct bylaw PDF links, so there
-                      is nothing to auto-ingest until we add municipal PDFs to the index (or you
-                      upload a file below).
-                    </p>
-                  </div>
-                )}
-              </section>
-
-              <details className="zone-details">
-                <summary>Technical · API &amp; ingest detail</summary>
-                <p className="muted small">
-                  <a href={API.zone(selected.id)} target="_blank" rel="noreferrer">
-                    GET {API.zone(selected.id)} <ExternalLink size={12} />
-                  </a>
-                </p>
-                {analyzeData?.ingest?.results && analyzeData.ingest.results.length > 0 && (
-                  <ul className="ingest-list ingest-list--compact">
-                    {analyzeData.ingest.results.map((row, i) => (
-                      <li key={i}>
-                        <span className={`tag tag--${row.status ?? 'unknown'}`}>
-                          {row.status ?? '?'}
-                        </span>{' '}
-                        {row.source_url && (
-                          <span className="muted small">{row.source_url.slice(0, 48)}…</span>
+                  <details className="side-fold">
+                    <summary>Sources and documents</summary>
+                    <div className="side-fold__body">
+                      <section className="zone-section zone-section--compact">
+                        <h3 className="h3">Official city websites</h3>
+                        {(selected.publicResources?.length ?? 0) > 0 ? (
+                          <ul className="resource-links">
+                            {selected.publicResources!.map((r) => (
+                              <li key={r.url}>
+                                <a href={r.url} target="_blank" rel="noreferrer">
+                                  {r.label} <ExternalLink size={12} />
+                                </a>
+                              </li>
+                            ))}
+                          </ul>
+                        ) : (
+                          <p className="muted small">No curated links for this municipality slug.</p>
                         )}
-                        {row.document_id && (
-                          <div>
-                            <code className="inline-code">{row.document_id}</code>
+                      </section>
+
+                      <section className="zone-section zone-section--compact">
+                        <h3 className="h3">Bylaw PDFs from GIS metadata</h3>
+                        {selected.sourceDocuments?.length ? (
+                          <ul className="link-list">
+                            {selected.sourceDocuments.map((u) => (
+                              <li key={u}>
+                                <a href={u} target="_blank" rel="noreferrer">
+                                  {u.replace(/^https?:\/\//, '').slice(0, 72)}
+                                  {u.length > 72 ? '…' : ''}
+                                </a>
+                              </li>
+                            ))}
+                          </ul>
+                        ) : (
+                          <div className="callout callout--info">
+                            <p>
+                              <strong>No PDF URLs on this record.</strong> Waterloo and Kitchener zoning
+                              layers usually store zone codes and labels, not direct bylaw PDF links, so there
+                              is nothing to auto-ingest until we add municipal PDFs to the index (or you
+                              upload a file below).
+                            </p>
                           </div>
                         )}
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </details>
-            </div>
-          )}
+                      </section>
+                    </div>
+                  </details>
 
-          <hr className="sep" />
+                  <details className="side-fold">
+                    <summary>Upload your own PDF</summary>
+                    <div className="side-fold__body">
+                      <p className="muted small">
+                        <code>POST {API.documentsUpload}</code> — optional; adds a dedicated{' '}
+                        <code>document_id</code> filter for RAG when you want to search one uploaded document.
+                      </p>
+                      <label className="upload-dropzone">
+                        <input
+                          type="file"
+                          accept="application/pdf,.pdf"
+                          disabled={uploadBusy}
+                          onChange={(e) => void onUpload(e.target.files)}
+                        />
+                        <span className="upload-dropzone__title">
+                          {uploadBusy ? 'Uploading and indexing PDF…' : 'Choose a PDF to index'}
+                        </span>
+                        <span className="upload-dropzone__meta">
+                          Use this when the zone record has no linked bylaw PDF or you want to search one document directly.
+                        </span>
+                      </label>
+                      {uploadError && <p className="err">{uploadError}</p>}
+                      {uploadResult && (
+                        <div className="callout callout--success">
+                          <p>
+                            <strong>{uploadResult.original_filename}</strong> indexed successfully.
+                          </p>
+                          <p className="small">
+                            {uploadResult.chunks_indexed} chunks · <code>{uploadResult.document_id}</code>
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  </details>
 
-          <h2 className="h2">Follow-up (RAG)</h2>
-          <p className="muted small">
-            Default insights come from <code>POST …/analyze</code>. Ask another question with{' '}
-            <code>POST {API.rag}</code>
-            {selected
-              ? ` — zone context: ${selected.zoneCode} (${titleCaseMunicipality(selected.municipality)})`
-              : ' — click a polygon first for zone-aware answers'}
-            .
-          </p>
-          <div className="prompt-row">
-            {promptChips.map((prompt) => (
-              <button
-                key={prompt}
-                type="button"
-                className="prompt-chip"
-                onClick={() => setRagQuestion(prompt)}
-              >
-                {prompt}
-              </button>
-            ))}
-          </div>
-          <textarea
-            className="textarea"
-            rows={3}
-            value={ragQuestion}
-            onChange={(e) => setRagQuestion(e.target.value)}
-            placeholder="Ask about permitted uses, setbacks, parking, density, or what bylaw sections to read first."
-          />
-          <button
-            type="button"
-            className="btn btn--primary"
-            disabled={ragLoading}
-            onClick={() => void runRag()}
-          >
-            {ragLoading ? <Loader2 size={16} className="spin" /> : <Sparkles size={16} />}
-            Ask
-          </button>
-          {!selected && (
-            <p className="muted small">
-              Tip: select a zone first so the answer can use zone-specific evidence and linked documents.
-            </p>
-          )}
-          {ragError && <p className="err">{ragError}</p>}
-          {ragData?.answer && (
-            <div className="rag-answer">
-              <FormattedRagAnswer text={ragData.answer} />
-              {ragData.model && (
-                <p className="muted small">Model: {ragData.model}</p>
-              )}
-              {ragData.sources && ragData.sources.length > 0 && (
-                <div>
-                  <h3 className="h3">Sources</h3>
-                  <ol className="sources">
-                    {ragData.sources.map((s, i) => (
-                      <li key={i}>
-                        <strong>{s.human_label ?? `Passage ${i + 1}`}</strong>
-                        {s.page != null && <> · p.{s.page}</>}
-                        {s.score != null && (
-                          <> · score {typeof s.score === 'number' ? s.score.toFixed(3) : s.score}</>
-                        )}
-                        {s.source_url && (
-                          <div>
-                            <a href={s.source_url} target="_blank" rel="noreferrer">
-                              {s.source_url}
-                            </a>
-                          </div>
-                        )}
-                      </li>
-                    ))}
-                  </ol>
+                  <details className="side-fold">
+                    <summary>Technical details</summary>
+                    <div className="side-fold__body">
+                      <p className="muted small">
+                        <a href={API.zone(selected.id)} target="_blank" rel="noreferrer">
+                          GET {API.zone(selected.id)} <ExternalLink size={12} />
+                        </a>
+                      </p>
+                      {analyzeData?.ingest?.results && analyzeData.ingest.results.length > 0 && (
+                        <ul className="ingest-list ingest-list--compact">
+                          {analyzeData.ingest.results.map((row, i) => (
+                            <li key={i}>
+                              <span className={`tag tag--${row.status ?? 'unknown'}`}>
+                                {row.status ?? '?'}
+                              </span>{' '}
+                              {row.source_url && (
+                                <span className="muted small">{row.source_url.slice(0, 48)}…</span>
+                              )}
+                              {row.document_id && (
+                                <div>
+                                  <code className="inline-code">{row.document_id}</code>
+                                </div>
+                              )}
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                  </details>
                 </div>
               )}
-            </div>
-          )}
-
-          <hr className="sep" />
-
-          <h2 className="h2">Upload PDF</h2>
-          <p className="muted small">
-            <code>POST {API.documentsUpload}</code> — optional; adds a dedicated{' '}
-            <code>document_id</code> filter for RAG when you want to search one uploaded document.
-          </p>
-          <label className="upload-dropzone">
-            <input
-              type="file"
-              accept="application/pdf,.pdf"
-              disabled={uploadBusy}
-              onChange={(e) => void onUpload(e.target.files)}
-            />
-            <span className="upload-dropzone__title">
-              {uploadBusy ? 'Uploading and indexing PDF…' : 'Choose a PDF to index'}
-            </span>
-            <span className="upload-dropzone__meta">
-              Use this when the zone record has no linked bylaw PDF or you want to search one document directly.
-            </span>
-          </label>
-          {uploadError && <p className="err">{uploadError}</p>}
-          {uploadResult && (
-            <div className="callout callout--success">
-              <p>
-                <strong>{uploadResult.original_filename}</strong> indexed successfully.
-              </p>
-              <p className="small">
-                {uploadResult.chunks_indexed} chunks · <code>{uploadResult.document_id}</code>
-              </p>
             </div>
           )}
         </aside>
