@@ -1,3 +1,11 @@
+def test_root_ok(client):
+    res = client.get("/")
+    assert res.status_code == 200
+    data = res.get_json()
+    assert data["service"] == "zoning-api"
+    assert "endpoints" in data
+
+
 def test_health_ok(client):
     res = client.get("/api/v1/health")
     assert res.status_code == 200

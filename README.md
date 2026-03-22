@@ -254,18 +254,35 @@ Respect **robots.txt**, **terms of use**, and **rate limits**. Prefer **open dat
 
 2. **Infrastructure (optional):** from the repo root, run `docker compose up -d` for Postgres, Redis, Qdrant, and MinIO. If you skip Docker, the API defaults to **SQLite** (`backend/zoning_dev.db`) until you set `DATABASE_URL`.
 
-3. **Backend**
-   ```bash
+3. **Backend** — dependencies live in **`backend/requirements.txt`** (there is no `requirements.txt` at the repo root). Install into a **virtualenv** so packages and the Flask CLI stay together.
+
+   **Windows (PowerShell)** — if `flask` is “not recognized”, use `python -m flask` or `run_dev.py` (see below).
+
+   ```powershell
    cd backend
    python -m venv .venv
-   .venv\Scripts\activate          # Windows
-   # source .venv/bin/activate     # macOS / Linux
-   pip install -r requirements.txt
-   pip install -r requirements-ai.txt   # optional
-   flask db upgrade                    # apply migrations (after db init on a fresh clone)
-   flask run --debug                 # http://127.0.0.1:5000
+   .\.venv\Scripts\Activate.ps1
+   python -m pip install -r requirements.txt
+   python -m flask db upgrade
+   python run_dev.py
    ```
-   On a **new** machine after clone, run `flask db init` only if `backend/migrations/` is missing (already committed in this repo).
+
+   **macOS / Linux**
+
+   ```bash
+   cd backend
+   python3 -m venv .venv
+   source .venv/bin/activate
+   pip install -r requirements.txt
+   python -m flask db upgrade
+   python run_dev.py
+   ```
+
+   Same as `flask run --debug` when the `flask` script is on your PATH: `python -m flask run --debug` (after `cd backend` and venv activate).
+
+   On a **new** machine after clone, run `python -m flask db init` only if `backend/migrations/` is missing (already committed in this repo).
+
+   Optional: `pip install -r requirements-ai.txt` for extra AI packages when you add them.
 
 4. **Frontend**
    ```bash

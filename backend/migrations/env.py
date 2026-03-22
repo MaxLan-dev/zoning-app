@@ -1,6 +1,8 @@
 import logging
 from logging.config import fileConfig
 
+import app.load_env  # noqa: F401 — ensure .env when Flask-Migrate loads Alembic env
+
 from flask import current_app
 
 from alembic import context

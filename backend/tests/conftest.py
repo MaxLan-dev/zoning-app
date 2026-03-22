@@ -1,3 +1,5 @@
+import app.load_env  # noqa: F401 — same env as dev when running tests
+
 import pytest
 
 from app import create_app

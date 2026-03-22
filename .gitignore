@@ -16,6 +16,7 @@ dist/
 *.egg-info/
 .eggs/
 backend/zoning_dev.db
+backend/uploads/
 
 # Node
 frontend/node_modules/

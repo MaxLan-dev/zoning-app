@@ -1,8 +1,4 @@
-# LangChain + LangSmith (optional). On Windows + Python 3.14 you may need
-# Microsoft C++ Build Tools, or use Python 3.12/3.11 with prebuilt wheels.
+# Optional extras (e.g. OpenAI) layered on the core stack in requirements.txt.
 -r requirements.txt
 
-langchain>=0.3,<0.4
-langchain-community>=0.3,<0.4
-langchain-openai>=0.2,<0.4
-langsmith>=0.1,<0.4
+# langchain-openai>=0.2,<0.4  # uncomment if you add OPENAI_API_KEY
