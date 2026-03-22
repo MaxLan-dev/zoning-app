@@ -1,5 +1,5 @@
 import L from 'leaflet'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
 import { GeoJSON, MapContainer, TileLayer, useMap, ZoomControl } from 'react-leaflet'
 import type { Feature, FeatureCollection, GeoJsonObject } from 'geojson'
 import {
@@ -45,6 +45,8 @@ type RegionSummaryRes = {
   countByMunicipality: Record<string, number>
 }
 
+type PublicResource = { label: string; url: string }
+
 type ZoneMatch = {
   id: number
   municipality: string
@@ -56,6 +58,7 @@ type ZoneMatch = {
   effectiveDate?: string | null
   sourceObjectId: string
   sourceDocuments: string[]
+  publicResources?: PublicResource[]
   sourceUrl?: string
   geojsonUrl?: string
   lastRunId?: string | null
@@ -112,7 +115,14 @@ type ZoneRecordDetail = ZoneMatch & {
 type AnalyzeResponse = {
   zoneId: number
   record: ZoneRecordDetail
-  ingest: { results: IngestResultRow[] }
+  ingest: {
+    results: IngestResultRow[]
+    summary?: {
+      linkedPdfUrlsInOpenData: number
+      rows: number
+      byStatus: Record<string, number>
+    }
+  }
   rag: RagRes & { query?: string }
 }
 
@@ -132,6 +142,43 @@ function redactAnalyzeForClipboard(data: AnalyzeResponse): AnalyzeResponse {
     }
   }
   return { ...data, record }
+}
+
+function FormattedRagAnswer({ text }: { text: string }) {
+  const paragraphs = text
+    .split(/\n{2,}/)
+    .map((p) => p.trim())
+    .filter(Boolean)
+  return (
+    <div className="rag-prose">
+      {paragraphs.map((para, i) => {
+        const lines = para.split('\n')
+        const nonEmpty = lines.map((l) => l.trim()).filter(Boolean)
+        const allBullets =
+          nonEmpty.length > 1 &&
+          nonEmpty.every((l) => /^(\d+[\).]|[•\-*])\s/.test(l))
+        if (allBullets) {
+          return (
+            <ul key={i} className="rag-list">
+              {nonEmpty.map((l, j) => (
+                <li key={j}>{l.replace(/^(\d+[\).]|[•\-*])\s+/, '')}</li>
+              ))}
+            </ul>
+          )
+        }
+        return (
+          <p key={i}>
+            {lines.map((line, j) => (
+              <Fragment key={j}>
+                {line}
+                {j < lines.length - 1 ? <br /> : null}
+              </Fragment>
+            ))}
+          </p>
+        )
+      })}
+    </div>
+  )
 }
 
 function geoJsonStyle(feature?: Feature): L.PathOptions {
@@ -266,6 +313,7 @@ export default function App() {
   const runAnalyze = useCallback(async (zoneId: number, customQ?: string) => {
     setAnalyzeLoading(true)
     setAnalyzeError(null)
+    setAnalyzeData(null)
     try {
       const res = await fetch(API.zoneAnalyze(zoneId), {
         method: 'POST',
@@ -527,98 +575,214 @@ export default function App() {
           )}
           {selected && (
             <div className="zone-card">
-              <div className="zone-head">
-                <strong>{selected.zoneCode}</strong>
-                <span className="badge">{selected.municipality}</span>
-              </div>
-              <dl className="dl">
-                {selected.zoneType && (
-                  <>
-                    <dt>Type</dt>
-                    <dd>{selected.zoneType}</dd>
-                  </>
-                )}
+              <div className="zone-hero">
+                <div className="zone-hero__row">
+                  <span className="zone-hero__code">{selected.zoneCode}</span>
+                  <span className="badge badge--mun">{selected.municipality}</span>
+                </div>
                 {selected.zoneName && (
-                  <>
-                    <dt>Name</dt>
-                    <dd>{selected.zoneName}</dd>
-                  </>
+                  <p className="zone-hero__name">{selected.zoneName}</p>
                 )}
-                {selected.status && (
-                  <>
-                    <dt>Status</dt>
-                    <dd>{selected.status}</dd>
-                  </>
-                )}
-                {selected.bylawNumber && (
-                  <>
-                    <dt>Bylaw</dt>
-                    <dd>{selected.bylawNumber}</dd>
-                  </>
-                )}
-                {selected.effectiveDate && (
-                  <>
-                    <dt>Effective</dt>
-                    <dd>{selected.effectiveDate}</dd>
-                  </>
-                )}
-                <dt>Source object</dt>
-                <dd>
-                  <code>{selected.sourceObjectId}</code>
-                </dd>
-                <dt>API</dt>
-                <dd>
-                  <a href={API.zone(selected.id)} target="_blank" rel="noreferrer">
-                    GET {API.zone(selected.id)}
-                    <ExternalLink size={12} />
-                  </a>
-                </dd>
-              </dl>
-              <h3 className="h3">Linked PDFs</h3>
-              {selected.sourceDocuments?.length ? (
-                <ul className="link-list">
-                  {selected.sourceDocuments.map((u) => (
-                    <li key={u}>
-                      <a href={u} target="_blank" rel="noreferrer">
-                        {u.replace(/^https?:\/\//, '').slice(0, 72)}
-                        {u.length > 72 ? '…' : ''}
+              </div>
+
+              <section className="zone-section">
+                <h3 className="h3">Open data · this polygon</h3>
+                <dl className="dl dl--compact">
+                  {selected.zoneType && (
+                    <>
+                      <dt>Category</dt>
+                      <dd>{selected.zoneType}</dd>
+                    </>
+                  )}
+                  {selected.status && (
+                    <>
+                      <dt>Status</dt>
+                      <dd>{selected.status}</dd>
+                    </>
+                  )}
+                  {selected.bylawNumber && (
+                    <>
+                      <dt>Bylaw ref.</dt>
+                      <dd>{selected.bylawNumber}</dd>
+                    </>
+                  )}
+                  {selected.effectiveDate && (
+                    <>
+                      <dt>Effective</dt>
+                      <dd>{selected.effectiveDate}</dd>
+                    </>
+                  )}
+                  <dt>Feature ID</dt>
+                  <dd>
+                    <code className="inline-code">{selected.sourceObjectId}</code>
+                  </dd>
+                </dl>
+              </section>
+
+              <section className="zone-section">
+                <h3 className="h3">Data feeds</h3>
+                <ul className="resource-links">
+                  {selected.geojsonUrl && (
+                    <li>
+                      <a href={selected.geojsonUrl} target="_blank" rel="noreferrer">
+                        Zoning GeoJSON layer <ExternalLink size={12} />
                       </a>
                     </li>
-                  ))}
-                </ul>
-              ) : (
-                <p className="muted">No sourceDocuments on this record.</p>
-              )}
-              <p className="muted small">
-                Linked PDFs are sent to the vector index automatically via{' '}
-                <code className="inline-code">POST …/analyze</code> when you select this zone
-                (no extra click).
-              </p>
-              {analyzeLoading && (
-                <p className="muted small">
-                  <Loader2 size={14} className="spin" /> Indexing PDFs and running RAG…
-                </p>
-              )}
-              {analyzeError && <p className="err small">{analyzeError}</p>}
-              {analyzeData?.ingest?.results && analyzeData.ingest.results.length > 0 && (
-                <ul className="ingest-list">
-                  {analyzeData.ingest.results.map((row, i) => (
-                    <li key={i}>
-                      <span className={`tag tag--${row.status ?? 'unknown'}`}>
-                        {row.status ?? '?'}
-                      </span>{' '}
-                      {row.source_url && (
-                        <span className="muted small">{row.source_url.slice(0, 40)}…</span>
-                      )}
-                      {row.document_id && (
-                        <div>
-                          <code className="inline-code">{row.document_id}</code>
-                        </div>
-                      )}
+                  )}
+                  {selected.sourceUrl && (
+                    <li>
+                      <a href={selected.sourceUrl} target="_blank" rel="noreferrer">
+                        Map service (ArcGIS) <ExternalLink size={12} />
+                      </a>
                     </li>
-                  ))}
+                  )}
                 </ul>
-              )}
+              </section>
+
+              <section className="zone-section zone-section--insights">
+                <h3 className="h3 h3--insights">
+                  <Sparkles size={17} strokeWidth={2} /> AI insights
+                </h3>
+                <p className="muted small zone-lede">
+                  We run <code className="inline-code">POST …/analyze</code> when you pick a zone:
+                  ingest any PDF URLs stored in open data, then ask the model using retrieved text only.
+                </p>
+                {analyzeLoading && (
+                  <div className="callout callout--wait">
+                    <Loader2 size={18} className="spin" />
+                    <span>Indexing linked PDFs (if any) and generating an answer…</span>
+                  </div>
+                )}
+                {analyzeError && <p className="err">{analyzeError}</p>}
+                {!analyzeLoading && analyzeData && (
+                  <>
+                    {analyzeData.ingest.summary && (
+                      <p className="ingest-pill muted small">
+                        <strong>Open data PDF links:</strong>{' '}
+                        {analyzeData.ingest.summary.linkedPdfUrlsInOpenData} ·{' '}
+                        <strong>Ingest rows:</strong> {analyzeData.ingest.summary.rows}
+                        {Object.keys(analyzeData.ingest.summary.byStatus).length > 0 && (
+                          <>
+                            {' '}
+                            (
+                            {Object.entries(analyzeData.ingest.summary.byStatus)
+                              .map(([k, v]) => `${k}: ${v}`)
+                              .join(', ')}
+                            )
+                          </>
+                        )}
+                      </p>
+                    )}
+                    {analyzeData.rag.error && (
+                      <div className="callout callout--warn">
+                        <strong>AI unavailable or limited.</strong>{' '}
+                        {analyzeData.rag.message ?? analyzeData.rag.error}
+                      </div>
+                    )}
+                    {analyzeData.rag.answer && (
+                      <div className="rag-answer rag-answer--hero">
+                        <FormattedRagAnswer text={analyzeData.rag.answer} />
+                        {analyzeData.rag.model && (
+                          <p className="muted small rag-model">Model: {analyzeData.rag.model}</p>
+                        )}
+                      </div>
+                    )}
+                    {analyzeData.rag.sources && analyzeData.rag.sources.length > 0 && (
+                      <div className="sources-block">
+                        <h4 className="h4">Sources used</h4>
+                        <ol className="sources">
+                          {analyzeData.rag.sources.map((s, i) => (
+                            <li key={i}>
+                              <strong>{s.human_label ?? `Passage ${i + 1}`}</strong>
+                              {s.page != null && <> · p.{s.page}</>}
+                              {s.source_url && (
+                                <div>
+                                  <a href={s.source_url} target="_blank" rel="noreferrer">
+                                    {s.source_url}
+                                  </a>
+                                </div>
+                              )}
+                            </li>
+                          ))}
+                        </ol>
+                      </div>
+                    )}
+                  </>
+                )}
+                {!analyzeLoading && !analyzeData && !analyzeError && (
+                  <p className="muted small">Waiting for zone analysis…</p>
+                )}
+              </section>
+
+              <section className="zone-section">
+                <h3 className="h3">Official city websites</h3>
+                {(selected.publicResources?.length ?? 0) > 0 ? (
+                  <ul className="resource-links">
+                    {selected.publicResources!.map((r) => (
+                      <li key={r.url}>
+                        <a href={r.url} target="_blank" rel="noreferrer">
+                          {r.label} <ExternalLink size={12} />
+                        </a>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="muted small">No curated links for this municipality slug.</p>
+                )}
+              </section>
+
+              <section className="zone-section">
+                <h3 className="h3">Bylaw PDFs from GIS metadata</h3>
+                {selected.sourceDocuments?.length ? (
+                  <ul className="link-list">
+                    {selected.sourceDocuments.map((u) => (
+                      <li key={u}>
+                        <a href={u} target="_blank" rel="noreferrer">
+                          {u.replace(/^https?:\/\//, '').slice(0, 72)}
+                          {u.length > 72 ? '…' : ''}
+                        </a>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <div className="callout callout--info">
+                    <p>
+                      <strong>No PDF URLs on this record.</strong> Waterloo and Kitchener zoning
+                      layers usually store zone codes and labels, not direct bylaw PDF links, so there
+                      is nothing to auto-ingest until we add municipal PDFs to the index (or you
+                      upload a file below).
+                    </p>
+                  </div>
+                )}
+              </section>
+
+              <details className="zone-details">
+                <summary>Technical · API &amp; ingest detail</summary>
+                <p className="muted small">
+                  <a href={API.zone(selected.id)} target="_blank" rel="noreferrer">
+                    GET {API.zone(selected.id)} <ExternalLink size={12} />
+                  </a>
+                </p>
+                {analyzeData?.ingest?.results && analyzeData.ingest.results.length > 0 && (
+                  <ul className="ingest-list ingest-list--compact">
+                    {analyzeData.ingest.results.map((row, i) => (
+                      <li key={i}>
+                        <span className={`tag tag--${row.status ?? 'unknown'}`}>
+                          {row.status ?? '?'}
+                        </span>{' '}
+                        {row.source_url && (
+                          <span className="muted small">{row.source_url.slice(0, 48)}…</span>
+                        )}
+                        {row.document_id && (
+                          <div>
+                            <code className="inline-code">{row.document_id}</code>
+                          </div>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </details>
             </div>
           )}
 
@@ -647,7 +811,7 @@ export default function App() {
           {ragError && <p className="err">{ragError}</p>}
           {ragData?.answer && (
             <div className="rag-answer">
-              <p>{ragData.answer}</p>
+              <FormattedRagAnswer text={ragData.answer} />
               {ragData.model && (
                 <p className="muted small">Model: {ragData.model}</p>
               )}
@@ -790,7 +954,7 @@ export default function App() {
                     </dd>
                     <dt>Geometry</dt>
                     <dd className="muted">{geometrySummary(analyzeData.record.geometry)}</dd>
-                    <dt>Source URLs</dt>
+                    <dt>GIS-linked PDFs</dt>
                     <dd>
                       {analyzeData.record.sourceDocuments?.length ? (
                         <ul className="link-list">
@@ -798,6 +962,22 @@ export default function App() {
                             <li key={u}>
                               <a href={u} target="_blank" rel="noreferrer">
                                 {u}
+                              </a>
+                            </li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <span className="muted">None on this record</span>
+                      )}
+                    </dd>
+                    <dt>Official websites</dt>
+                    <dd>
+                      {analyzeData.record.publicResources?.length ? (
+                        <ul className="link-list">
+                          {analyzeData.record.publicResources.map((r) => (
+                            <li key={r.url}>
+                              <a href={r.url} target="_blank" rel="noreferrer">
+                                {r.label}
                               </a>
                             </li>
                           ))}
@@ -845,21 +1025,14 @@ export default function App() {
                       <strong>Question:</strong> {analyzeData.rag.query}
                     </p>
                   )}
-                  {analyzeData.rag.error || analyzeData.rag.message ? (
-                    <p className="err">
+                  {analyzeData.rag.error && (
+                    <div className="callout callout--warn">
                       {analyzeData.rag.message ?? analyzeData.rag.error}
-                      {!analyzeData.rag.answer && (
-                        <span className="muted small">
-                          {' '}
-                          (Set <code className="inline-code">GROQ_API_KEY</code> on the server for
-                          answers.)
-                        </span>
-                      )}
-                    </p>
-                  ) : null}
+                    </div>
+                  )}
                   {analyzeData.rag.answer && (
                     <div className="rag-answer rag-answer--panel">
-                      <p>{analyzeData.rag.answer}</p>
+                      <FormattedRagAnswer text={analyzeData.rag.answer} />
                       {analyzeData.rag.model && (
                         <p className="muted small">Model: {analyzeData.rag.model}</p>
                       )}

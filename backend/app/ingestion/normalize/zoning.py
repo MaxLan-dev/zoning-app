@@ -1,8 +1,14 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
+
+_URL_IN_STRING = re.compile(
+    r"https?://[^\s\"'<>]+",
+    re.IGNORECASE,
+)
 
 from app.ingestion.scrapers.templates import MunicipalityTemplate
 
@@ -141,17 +147,49 @@ def _parse_effective_date(value: str | None) -> str | None:
 
 
 def _extract_source_documents(properties: dict[str, Any]) -> list[str]:
+    """Collect PDF/document URLs from feature properties (field names vary by municipality)."""
     documents: list[str] = []
+    seen: set[str] = set()
+
+    def add(url: str) -> None:
+        u = url.strip()
+        if not u or u in seen:
+            return
+        seen.add(u)
+        documents.append(u)
+
     for key, value in properties.items():
         if not isinstance(value, str):
             continue
-        if not value.strip():
+        raw = value.strip()
+        if not raw:
             continue
         normalized_key = key.lower()
         if normalized_key.startswith("generaldocument") or normalized_key.endswith(
             "_document"
         ):
-            documents.append(value.strip())
+            add(raw)
+            continue
+        if normalized_key.endswith("_url") or normalized_key.endswith("_link"):
+            if raw.lower().startswith(("http://", "https://")):
+                add(raw)
+            continue
+        if any(
+            token in normalized_key
+            for token in ("pdf", "bylaw", "documenturl", "doc_url", "attachment")
+        ):
+            for m in _URL_IN_STRING.findall(raw):
+                add(m)
+            if raw.lower().startswith(("http://", "https://")):
+                add(raw)
+            continue
+        if raw.lower().startswith(("http://", "https://")):
+            if raw.lower().endswith(".pdf") or "pdf" in normalized_key:
+                add(raw)
+            for m in _URL_IN_STRING.findall(raw):
+                if m.lower().rstrip(").,]").endswith(".pdf"):
+                    add(m)
+
     return documents
 
 
