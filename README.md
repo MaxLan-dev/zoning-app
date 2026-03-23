@@ -1,4 +1,4 @@
-# National Zoning & Land Use Data Platform
+# ZoneSmart - National Zoning & Land Use Data Platform
 
 Full-stack platform for aggregating Canadian municipal zoning and land use data into a searchable, analyzable, open dataset.
 
