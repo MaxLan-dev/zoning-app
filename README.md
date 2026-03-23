@@ -1,5 +1,7 @@
 # ZoneSmart - National Zoning & Land Use Data Platform
 
+<img width="2045" height="1221" alt="image" src="https://github.com/user-attachments/assets/3fea93ad-5d15-4e6d-813f-4b4d0c9c3df4" />
+
 Full-stack platform for aggregating Canadian municipal zoning and land use data into a searchable, analyzable, open dataset.
 
 **Stack:** Flask (API), React + TypeScript (UI), **Qdrant** (vectors), **Groq** (RAG answers), **Beautiful Soup** (HTML scraping). Optional **LangSmith** (tracing env for tooling you add); LangChain lives in `requirements-ai.txt` when you wire it.
