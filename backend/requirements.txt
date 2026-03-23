@@ -1,5 +1,6 @@
 # Core API, DB, scraping, vectors (install this first)
 flask>=3.0,<4
+gunicorn>=22.0,<24
 python-dotenv>=1.0,<2
 flask-cors>=4.0,<6
 sqlalchemy>=2.0,<3

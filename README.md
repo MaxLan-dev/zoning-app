@@ -312,6 +312,52 @@ Respect **robots.txt**, **terms of use**, and **rate limits**. Prefer **open dat
 
 ---
 
+## Production deploy (Docker + Cloudflare Tunnel)
+
+This repo includes:
+
+- `backend/Dockerfile` (Flask served by `gunicorn`)
+- `frontend/Dockerfile` + `frontend/nginx.conf` (static UI + `/api` reverse proxy to backend)
+- `docker-compose.prod.yml` (frontend, backend, postgres, qdrant, cloudflared)
+
+### 1) Prepare environment
+
+Copy `.env.example` to `.env` and set:
+
+- `PUBLIC_HOSTNAME` (for CORS origin, e.g. `app.example.com`)
+- `CLOUDFLARE_TUNNEL_TOKEN`
+- `POSTGRES_*` and optionally `DATABASE_URL`
+- `GROQ_API_KEY` if you want RAG answers
+
+### 2) Configure Cloudflare Tunnel ingress
+
+In Zero Trust Tunnel settings, route:
+
+- `app.example.com` -> `http://frontend:80`
+
+Because nginx proxies `/api/*` to `backend:5000`, one hostname is enough.
+
+### 3) Build and run
+
+```bash
+docker compose -f docker-compose.prod.yml up -d --build
+```
+
+### 4) Run DB migrations inside backend container
+
+```bash
+docker compose -f docker-compose.prod.yml run --rm backend flask --app wsgi:app db upgrade
+```
+
+### 5) Smoke test
+
+```bash
+docker compose -f docker-compose.prod.yml ps
+curl -sS https://app.example.com/api/v1/health
+```
+
+---
+
 ## Roadmap (suggested)
 
 1. **Skeleton** — Flask API, React shell, sample data, one LangChain RAG path with LangSmith tracing.  
