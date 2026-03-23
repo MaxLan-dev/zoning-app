@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="g1" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#6CFBFF"></stop>
+      <stop offset="100%" stop-color="#5B7CFF"></stop>
+    </linearGradient>
+    <linearGradient id="g2" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#8FFFFF"></stop>
+      <stop offset="100%" stop-color="#6CFBFF"></stop>
+    </linearGradient>
+    <linearGradient id="g3" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#4D5DFF"></stop>
+      <stop offset="100%" stop-color="#7C2CFF"></stop>
+    </linearGradient>
+  </defs>
+
+  <!-- Top -->
+  <polygon points="32,6 54,18 32,30 10,18" fill="url(#g2)" stroke="#CFFFFF" stroke-width="1.5"></polygon>
+
+  <!-- Left -->
+  <polygon points="10,18 32,30 32,54 10,42" fill="url(#g1)" stroke="#AFFFFF" stroke-width="1.5"></polygon>
+
+  <!-- Right -->
+  <polygon points="54,18 32,30 32,54 54,42" fill="url(#g3)" stroke="#AFAFFF" stroke-width="1.5"></polygon>
+
+  <!-- Outer outline for clarity at small sizes -->
+  <polygon points="32,6 54,18 54,42 32,54 10,42 10,18" fill="none" stroke="#EFFFFF" stroke-width="1.5"></polygon>
+</svg>
