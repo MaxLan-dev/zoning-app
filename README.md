@@ -14,13 +14,13 @@ Each municipality maintains its own zoning bylaws, official plans, and land use 
 
 ### Why manual scraping is not enough
 
-| Challenge | Description |
-|-----------|-------------|
-| **Fragmentation** | Thousands of municipalities, each with its own sites, document shapes, and formats; no central repository. |
-| **Inaccessibility** | Bylaws as scanned PDFs (OCR), permitted-use tables in appendices or split across documents. |
-| **Inconsistency** | Different terms and codes (e.g. “R-2” vs “Residential Low Density”). |
-| **Scale** | Roughly 4–5,000 municipalities in Canada; manual collection does not scale. |
-| **Currency** | Bylaws change often; one-time snapshots go stale without monitoring and updates. |
+| Challenge           | Description                                                                                                |
+| ------------------- | ---------------------------------------------------------------------------------------------------------- |
+| **Fragmentation**   | Thousands of municipalities, each with its own sites, document shapes, and formats; no central repository. |
+| **Inaccessibility** | Bylaws as scanned PDFs (OCR), permitted-use tables in appendices or split across documents.                |
+| **Inconsistency**   | Different terms and codes (e.g. “R-2” vs “Residential Low Density”).                                       |
+| **Scale**           | Roughly 4–5,000 municipalities in Canada; manual collection does not scale.                                |
+| **Currency**        | Bylaws change often; one-time snapshots go stale without monitoring and updates.                           |
 
 This platform combines **intelligent ingestion** (scraping, PDF/OCR, normalization), **structured storage and APIs**, **quality assurance**, and **LLM-assisted Qdrant RAG** (Groq + optional LangSmith/LangChain later), so scattered documents become a **unified, queryable dataset** for evidence-based housing and land-use research.
 
@@ -28,14 +28,14 @@ This platform combines **intelligent ingestion** (scraping, PDF/OCR, normalizati
 
 ## Goals
 
-| Goal | Description |
-|------|-------------|
-| **Ingest** | Scrape and ingest zoning bylaws, official plans, permitted-use tables, density, parking, setbacks—start with one province; design for national scale. |
-| **Standardize** | Parse into a flexible schema for cross-jurisdiction comparison (e.g. lot size, height, unit limits, parking, permitted housing types). |
-| **Expose** | Searchable database and JSON API: query by municipality, policy type, restriction, or geography. |
-| **Visualize** | Maps, dashboards, comparisons: restrictive policies, multi-family allowance, parking burden, outliers. |
-| **Maintain** | Automated updates, change detection, validation, and human review for ambiguous extractions. |
-| **Open** | Public dataset and documentation under an open license; documented API for researchers and journalists. |
+| Goal            | Description                                                                                                                                           |
+| --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Ingest**      | Scrape and ingest zoning bylaws, official plans, permitted-use tables, density, parking, setbacks—start with one province; design for national scale. |
+| **Standardize** | Parse into a flexible schema for cross-jurisdiction comparison (e.g. lot size, height, unit limits, parking, permitted housing types).                |
+| **Expose**      | Searchable database and JSON API: query by municipality, policy type, restriction, or geography.                                                      |
+| **Visualize**   | Maps, dashboards, comparisons: restrictive policies, multi-family allowance, parking burden, outliers.                                                |
+| **Maintain**    | Automated updates, change detection, validation, and human review for ambiguous extractions.                                                          |
+| **Open**        | Public dataset and documentation under an open license; documented API for researchers and journalists.                                               |
 
 **Optional extensions:** NLP on PDFs, geocoding zoning districts, ML for zone-type classification, version history for policies, crowdsourced corrections.
 
@@ -83,11 +83,11 @@ Flask remains the **system of record** for APIs, auth, and batch jobs; React del
 
 **Environment variables (example):**
 
-| Variable | Purpose |
-|----------|---------|
-| `QDRANT_URL` | e.g. `http://localhost:6333` or cloud URL |
-| `QDRANT_API_KEY` | If using Qdrant Cloud or a secured instance |
-| `QDRANT_COLLECTION` | Default collection (e.g. `zoning_chunks`) |
+| Variable            | Purpose                                     |
+| ------------------- | ------------------------------------------- |
+| `QDRANT_URL`        | e.g. `http://localhost:6333` or cloud URL   |
+| `QDRANT_API_KEY`    | If using Qdrant Cloud or a secured instance |
+| `QDRANT_COLLECTION` | Default collection (e.g. `zoning_chunks`)   |
 
 ---
 
@@ -95,11 +95,11 @@ Flask remains the **system of record** for APIs, auth, and batch jobs; React del
 
 **Role:** Parse **HTML** after HTTP fetch—listing pages, bylaw/plan pages, text and tables—often with **per-municipality** templates.
 
-| Piece | Tool |
-|-------|------|
-| HTTP | `requests` or `httpx` (sessions, retries, rate limits) |
-| HTML | **`beautifulsoup4`** (Beautiful Soup) — `find` / `select` (CSS selectors); `lxml` or `html.parser` |
-| JS-heavy sites | Playwright or Selenium *(optional)* |
+| Piece          | Tool                                                                                               |
+| -------------- | -------------------------------------------------------------------------------------------------- |
+| HTTP           | `requests` or `httpx` (sessions, retries, rate limits)                                             |
+| HTML           | **`beautifulsoup4`** (Beautiful Soup) — `find` / `select` (CSS selectors); `lxml` or `html.parser` |
+| JS-heavy sites | Playwright or Selenium _(optional)_                                                                |
 
 **Worker flow:** fetch → Beautiful Soup parse → extract links / text → PDF pipeline when needed → persist → chunk → embed → **Qdrant**.
 
@@ -159,13 +159,13 @@ zoning-app/
 
 Document in `docs/DATA_MODEL.md` as you implement:
 
-- **Jurisdiction** — province/territory, municipality, identifiers  
-- **Document** — URL, type, format, hash, fetch date  
-- **DocumentVersion** — immutability and change tracking  
-- **ZoneType** — local code + normalized category  
-- **Regulation** — permitted uses, setbacks, height, parking, density, etc.  
-- **Extraction** — structured fields, confidence, model version, optional LangSmith run id  
-- **ReviewTask** — human queue for low-confidence rows  
+- **Jurisdiction** — province/territory, municipality, identifiers
+- **Document** — URL, type, format, hash, fetch date
+- **DocumentVersion** — immutability and change tracking
+- **ZoneType** — local code + normalized category
+- **Regulation** — permitted uses, setbacks, height, parking, density, etc.
+- **Extraction** — structured fields, confidence, model version, optional LangSmith run id
+- **ReviewTask** — human queue for low-confidence rows
 
 Use **PostGIS** when you store or query geometries.
 
@@ -173,29 +173,30 @@ Use **PostGIS** when you store or query geometries.
 
 ## API surface (illustrative)
 
-| Area | Examples |
-|------|----------|
-| Catalog | `GET /api/v1/municipalities`, `GET /api/v1/municipalities/{id}/documents` |
-| Structured | `GET /api/v1/zones` with filters |
-| RAG | `POST /api/v1/rag` — retrieve context from Qdrant + Groq |
-| AI / NL | `POST /api/v1/query` — natural language; LangChain + Qdrant + citations |
-| Jobs | `POST /api/v1/jobs/ingest`, `GET /api/v1/jobs/{id}` |
-| Admin | Review, re-run extraction, export |
+| Area       | Examples                                                                  |
+| ---------- | ------------------------------------------------------------------------- |
+| Catalog    | `GET /api/v1/municipalities`, `GET /api/v1/municipalities/{id}/documents` |
+| Structured | `GET /api/v1/zones` with filters                                          |
+| RAG        | `POST /api/v1/rag` — retrieve context from Qdrant + Groq                  |
+| AI / NL    | `POST /api/v1/query` — natural language; LangChain + Qdrant + citations   |
+| Jobs       | `POST /api/v1/jobs/ingest`, `GET /api/v1/jobs/{id}`                       |
+| Admin      | Review, re-run extraction, export                                         |
 
 ---
 
 ## API surface (implemented now)
 
-| Area | Endpoints |
-|------|-----------|
-| Health | `GET /api/v1/health` |
-| Scrape | `POST /api/v1/scrape/links`, `POST /api/v1/scrape/geojson` |
-| Templates | `GET /api/v1/scrape/templates` |
-| Normalize | `POST /api/v1/scrape/geojson/normalized` |
-| Ingestion jobs | `POST /api/v1/jobs/ingest-zoning` |
-| Zones query | `GET /api/v1/zones` |
+| Area           | Endpoints                                                  |
+| -------------- | ---------------------------------------------------------- |
+| Health         | `GET /api/v1/health`                                       |
+| Scrape         | `POST /api/v1/scrape/links`, `POST /api/v1/scrape/geojson` |
+| Templates      | `GET /api/v1/scrape/templates`                             |
+| Normalize      | `POST /api/v1/scrape/geojson/normalized`                   |
+| Ingestion jobs | `POST /api/v1/jobs/ingest-zoning`                          |
+| Zones query    | `GET /api/v1/zones`                                        |
 
 **Waterloo template defaults:**
+
 - Source metadata URL: `https://gis.waterloo.ca/maps/rest/services/Public/Public_Operations/MapServer?f=json`
 - Default zoning GeoJSON URL: `https://gis.waterloo.ca/maps/rest/services/Public/Public_Operations/MapServer/48/query?where=1%3D1&outFields=*&f=geojson&outSR=4326`
 - Validation rules: requires source object id and polygon/multipolygon geometry
@@ -204,27 +205,27 @@ Use **PostGIS** when you store or query geometries.
 
 ## Ingestion and automation
 
-1. Discover (sitemaps, curated seeds per template)  
-2. Fetch (rate limits, `robots.txt`, ETag/hash caching)  
-3. Parse HTML with **Beautiful Soup**; PDFs via text/OCR  
-4. Normalize to canonical enums and fields where possible  
-5. Validate; flag anomalies  
-6. Index relational DB + **Qdrant** embeddings  
-7. Re-fetch on a schedule; diff and surface changes  
+1. Discover (sitemaps, curated seeds per template)
+2. Fetch (rate limits, `robots.txt`, ETag/hash caching)
+3. Parse HTML with **Beautiful Soup**; PDFs via text/OCR
+4. Normalize to canonical enums and fields where possible
+5. Validate; flag anomalies
+6. Index relational DB + **Qdrant** embeddings
+7. Re-fetch on a schedule; diff and surface changes
 
 ---
 
 ## Configuration (`.env.example`)
 
-| Variable | Purpose |
-|----------|---------|
-| `DATABASE_URL` | PostgreSQL (optional; else SQLite) |
-| `QDRANT_URL`, `QDRANT_API_KEY`, `QDRANT_COLLECTION` | Vector DB |
-| `GROQ_API_KEY`, `GROQ_MODEL` | RAG answers |
-| `EMBEDDING_MODEL`, `MAX_UPLOAD_MB` | Local embeddings + upload size |
-| `PDF_OCR_*` | PDF extraction / Tesseract (see `pdf/extract.py`) |
-| `LANGSMITH_API_KEY` | Optional; sets LangChain-compatible tracing env |
-| `FLASK_ENV`, `SECRET_KEY`, `CORS_ORIGINS` | Flask |
+| Variable                                            | Purpose                                           |
+| --------------------------------------------------- | ------------------------------------------------- |
+| `DATABASE_URL`                                      | PostgreSQL (optional; else SQLite)                |
+| `QDRANT_URL`, `QDRANT_API_KEY`, `QDRANT_COLLECTION` | Vector DB                                         |
+| `GROQ_API_KEY`, `GROQ_MODEL`                        | RAG answers                                       |
+| `EMBEDDING_MODEL`, `MAX_UPLOAD_MB`                  | Local embeddings + upload size                    |
+| `PDF_OCR_*`                                         | PDF extraction / Tesseract (see `pdf/extract.py`) |
+| `LANGSMITH_API_KEY`                                 | Optional; sets LangChain-compatible tracing env   |
+| `FLASK_ENV`, `SECRET_KEY`, `CORS_ORIGINS`           | Flask                                             |
 
 ---
 
@@ -236,17 +237,17 @@ Respect **robots.txt**, **terms of use**, and **rate limits**. Prefer **open dat
 
 ## Tech stack summary
 
-| Layer | Choice |
-|-------|--------|
-| API | Flask, SQLAlchemy, Alembic, Flask-CORS |
-| Jobs | In-process today; add Celery/RQ + Redis when needed |
-| DB | PostgreSQL (+ PostGIS, optional) |
-| Vector DB | **Qdrant** |
-| HTML scraping | **Beautiful Soup** + **requests** / **httpx** |
-| AI | Local embeddings (sentence-transformers); Groq for RAG; LangChain optional |
-| LLM ops | LangSmith |
-| UI | React 18+, TypeScript, Vite |
-| Maps | MapLibre / Leaflet (when geo is ready) |
+| Layer         | Choice                                                                     |
+| ------------- | -------------------------------------------------------------------------- |
+| API           | Flask, SQLAlchemy, Alembic, Flask-CORS                                     |
+| Jobs          | In-process today; add Celery/RQ + Redis when needed                        |
+| DB            | PostgreSQL (+ PostGIS, optional)                                           |
+| Vector DB     | **Qdrant**                                                                 |
+| HTML scraping | **Beautiful Soup** + **requests** / **httpx**                              |
+| AI            | Local embeddings (sentence-transformers); Groq for RAG; LangChain optional |
+| LLM ops       | LangSmith                                                                  |
+| UI            | React 18+, TypeScript, Vite                                                |
+| Maps          | MapLibre / Leaflet (when geo is ready)                                     |
 
 **Python dependencies:** `backend/requirements.txt` (core stack). Optional AI stack: `backend/requirements-ai.txt` (LangChain / LangSmith; on Windows + Python 3.14 you may need [Microsoft C++ Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) or Python 3.12 for prebuilt wheels).
 
@@ -289,6 +290,7 @@ Respect **robots.txt**, **terms of use**, and **rate limits**. Prefer **open dat
    Optional: `pip install -r requirements-ai.txt` for extra AI packages when you add them.
 
 4. **Frontend**
+
    ```bash
    cd frontend
    npm install
@@ -298,6 +300,7 @@ Respect **robots.txt**, **terms of use**, and **rate limits**. Prefer **open dat
 5. **LangSmith:** set the variables in `.env.example` under LangSmith / LangChain, install `requirements-ai.txt`, then run a chain and confirm traces in the LangSmith UI.
 
 6. **Quick Waterloo API verification**
+
    ```bash
    curl -X POST http://127.0.0.1:5000/api/v1/scrape/geojson/normalized \
      -H "Content-Type: application/json" \
@@ -312,12 +315,154 @@ Respect **robots.txt**, **terms of use**, and **rate limits**. Prefer **open dat
 
 ---
 
+## Production deploy (Docker + Cloudflare Tunnel)
+
+This repo includes:
+
+- `backend/Dockerfile` (Flask served by `gunicorn`)
+- `frontend/Dockerfile` + `frontend/nginx.conf` (static UI + `/api` reverse proxy to backend)
+- `docker-compose.prod.yml` (frontend, backend, postgres, qdrant, cloudflared)
+
+### 1) Prepare environment
+
+Copy `.env.example` to `.env` and set:
+
+- `PUBLIC_HOSTNAME` (for CORS origin, e.g. `zoning-app.example.com`)
+- `CLOUDFLARE_TUNNEL_TOKEN`
+- `POSTGRES_*` and optionally `DATABASE_URL`
+- `GROQ_API_KEY` if you want RAG answers
+
+### 2) Configure Cloudflare Tunnel ingress
+
+In Zero Trust Tunnel settings, route:
+
+- `zoning-app.example.com` -> `http://frontend:80`
+
+Because nginx proxies `/api/*` to `backend:5000`, one hostname is enough.
+
+### 3) Build and run
+
+```bash
+docker compose -f docker-compose.prod.yml up -d --build
+```
+
+### 4) Run DB migrations inside backend container
+
+```bash
+docker compose -f docker-compose.prod.yml run --rm backend flask --app wsgi:app db upgrade
+docker compose -f docker-compose.prod.yml run --rm backend flask --app wsgi:app db current
+docker compose -f docker-compose.prod.yml restart backend
+```
+
+### 5) Seed initial zoning data (first deploy)
+
+```bash
+curl -X POST https://zoning-app.example.com/api/v1/jobs/ingest-zoning \
+  -H "Content-Type: application/json" \
+  -d '{"municipality":"waterloo","paginate":true,"pageSize":2000,"maxPages":5}'
+
+curl -X POST https://zoning-app.example.com/api/v1/jobs/ingest-zoning \
+  -H "Content-Type: application/json" \
+  -d '{"municipality":"kitchener","paginate":true,"pageSize":2000,"maxPages":5}'
+```
+
+### 6) Smoke test
+
+```bash
+docker compose -f docker-compose.prod.yml ps
+curl -sS https://zoning-app.example.com/api/v1/health
+curl -sS "https://zoning-app.example.com/api/v1/zones?municipality=waterloo&limit=1"
+```
+
+### Common deployment issues
+
+- **`UndefinedTable` / `relation "zoning_records" does not exist`**  
+  Migrations were not applied to the running Postgres container. Re-run step 4.
+- **Frontend loads but map says network error**  
+  API route is returning 500 or stale cached assets in browser. Check backend logs and hard-refresh / clear site data.
+- **Tunnel shows Inactive in Cloudflare**  
+  Ensure `CLOUDFLARE_TUNNEL_TOKEN` is set in `.env`, then `docker compose ... up -d cloudflared`.
+
+---
+
+## System Flow
+
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant UI as Map UI
+    participant API as GeoJSON API
+    participant QB as Query Builder
+    participant RAG as RAG System
+    participant VDB as Vector DB
+    participant LLM as LLM
+
+    U->>UI: Click neighborhood
+    UI->>API: Fetch Geo Data (cost, income)
+    API-->>UI: Return GeoJSON properties
+
+    UI->>QB: Send neighborhood ID
+    QB->>RAG: Build semantic query
+
+    RAG->>VDB: Retrieve with metadata filter
+    VDB-->>RAG: Relevant zoning chunks
+
+    RAG->>LLM: Generate answer
+    LLM-->>RAG: Structured zoning info
+
+    RAG-->>UI: Return results
+    UI-->>U: Display popup (rules, cost, requirements)
+```
+
+```mermaid
+flowchart TD
+
+%% DATA INGESTION
+A[Municipal Open Data Sources] --> B[Scraper and Ingestion Layer]
+
+B --> C[Processing Pipeline]
+C --> C1[OCR PDFs]
+C --> C2[NLP Extraction]
+C --> C3[Data Standardization]
+
+%% GEO DATA LAYER
+C --> D[GeoJSON Generator]
+D --> E[GeoJSON Database and API - PostGIS GeoServer]
+
+%% RAG PREPARATION
+C --> F[Chunking Zoning Documents]
+F --> G[Embedding Model]
+G --> H[Vector Database Zoning Embeddings]
+
+F --> I[Metadata Store Municipality Zone Neighborhood]
+
+%% FRONTEND
+E --> J[Frontend Map UI]
+
+J --> K[User clicks neighborhood]
+K --> L[Query Builder with Neighborhood ID]
+
+%% RAG QUERY FLOW
+L --> M[RAG System]
+M --> N[Metadata Filtering by Neighborhood]
+N --> H
+
+H --> O[Relevant Zoning Chunks]
+O --> P[LLM Answer Generator]
+
+%% RESPONSE
+P --> Q[Structured Output Cost Income Rules Requirements]
+Q --> R[Frontend Display Map Popup Dashboard]
+```
+
+---
+
 ## Roadmap (suggested)
 
-1. **Skeleton** — Flask API, React shell, sample data, one LangChain RAG path with LangSmith tracing.  
-2. **Ingestion** — Beautiful Soup scraper template, PDF path, DB schema, document upload + RAG API.  
-3. **AI extraction** — LangChain extraction + review queue + LangSmith evals.  
-4. **Scale** — more municipalities, job scaling, change detection.  
+1. **Skeleton** — Flask API, React shell, sample data, one LangChain RAG path with LangSmith tracing.
+2. **Ingestion** — Beautiful Soup scraper template, PDF path, DB schema, document upload + RAG API.
+3. **AI extraction** — LangChain extraction + review queue + LangSmith evals.
+4. **Scale** — more municipalities, job scaling, change detection.
 5. **Open data** — documented export, license, public API policy.
 
 ---
